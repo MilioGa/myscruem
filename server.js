@@ -45,6 +45,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id), name TEXT NOT NULL, description TEXT NOT NULL, owner_id INTEGER NOT NULL REFERENCES users(id), archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE REFERENCES users(id), expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS stories (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), title TEXT NOT NULL, actor TEXT NOT NULL, goal TEXT NOT NULL, benefit TEXT NOT NULL, criteria TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
   const app = express();
   app.disable('x-powered-by');
@@ -210,6 +211,24 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!owner) fail('Selecciona un Product Owner activo de la empresa.');
     run('UPDATE projects SET owner_id=? WHERE id=?', owner.id, p.id);
     res.json({ ok: true });
+  });
+  app.get('/api/projects/:id/stories', auth, (req, res) => {
+    const project = projectFor(req);
+    const stories = all('SELECT * FROM stories WHERE project_id=? ORDER BY id', project.id);
+    res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })));
+  });
+  app.post('/api/projects/:id/stories', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner de este proyecto puede crear historias.', 403);
+    if (project.archived) fail('No se pueden agregar historias a un proyecto archivado.');
+    const title = text(req.body.title, 'Título');
+    const actor = text(req.body.actor, 'Como', 300);
+    const goal = text(req.body.goal, 'Quiero', 1000);
+    const benefit = text(req.body.benefit, 'Para', 1000);
+    if (!Array.isArray(req.body.criteria) || !req.body.criteria.length || req.body.criteria.length > 20) fail('Agrega entre 1 y 20 criterios de aceptación.');
+    const criteria = req.body.criteria.map(value => text(value, 'Criterio de aceptación', 1000));
+    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria) VALUES (?,?,?,?,?,?)', project.id, title, actor, goal, benefit, JSON.stringify(criteria)).lastInsertRowid);
+    res.status(201).json({ id });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
