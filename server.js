@@ -47,6 +47,9 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE REFERENCES users(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS stories (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), title TEXT NOT NULL, actor TEXT NOT NULL, goal TEXT NOT NULL, benefit TEXT NOT NULL, criteria TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'points')) {
+    db.exec('ALTER TABLE stories ADD COLUMN points INTEGER CHECK(points IN (1,2,3,5,8,13,21))');
+  }
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -229,6 +232,15 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const criteria = req.body.criteria.map(value => text(value, 'Criterio de aceptación', 1000));
     const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria) VALUES (?,?,?,?,?,?)', project.id, title, actor, goal, benefit, JSON.stringify(criteria)).lastInsertRowid);
     res.status(201).json({ id });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/estimate', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede estimar historias.', 403);
+    if (project.archived) fail('No se pueden estimar historias de un proyecto archivado.');
+    if (!get('SELECT id FROM stories WHERE id=? AND project_id=?', req.params.storyId, project.id)) fail('Historia no encontrada.', 404);
+    if (![1, 2, 3, 5, 8, 13, 21].includes(req.body.points)) fail('Selecciona 1, 2, 3, 5, 8, 13 o 21 puntos.');
+    run('UPDATE stories SET points=? WHERE id=?', req.body.points, req.params.storyId);
+    res.json({ ok: true });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
