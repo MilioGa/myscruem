@@ -133,8 +133,15 @@ async function storiesDialog(project) {
   try {
     const stories = await api(`/projects/${project.id}/stories`);
     const canCreate = !project.archived && state.user.role === 'Product Owner' && project.owner_id === state.user.id;
-    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'}</p>${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button>' : ''}${stories.length ? `<div class="story-list">${stories.map(story => `<article class="story"><small>HU-${story.id}</small><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><strong>Criterios de aceptación</strong><ul>${story.criteria.map(criterion => `<li>${escape(criterion)}</li>`).join('')}</ul></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
+    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'}</p>${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button>' : ''}${stories.length ? `<div class="story-list">${stories.map(story => `<article class="story"><small>HU-${story.id}</small><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><div class="story-points"><span>Puntos de historia</span>${state.user.role === 'Developer' && !project.archived ? `<select aria-label="Puntos de ${escape(story.title)}" data-estimate="${story.id}"><option value="" disabled ${story.points == null ? 'selected' : ''}>Sin estimar</option>${[1,2,3,5,8,13,21].map(points => `<option value="${points}" ${story.points === points ? 'selected' : ''}>${points}</option>`).join('')}</select>` : `<strong>${story.points ?? 'Sin estimar'}</strong>`}</div><strong>Criterios de aceptación</strong><ul>${story.criteria.map(criterion => `<li>${escape(criterion)}</li>`).join('')}</ul></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
     document.querySelector('#new-story')?.addEventListener('click', () => storyForm(project));
+    document.querySelectorAll('[data-estimate]').forEach(input => input.onchange = async () => {
+      input.disabled = true;
+      try {
+        await api(`/projects/${project.id}/stories/${input.dataset.estimate}/estimate`, 'PATCH', { points: Number(input.value) });
+        await storiesDialog(project);
+      } catch (error) { flash(error.message); await storiesDialog(project); }
+    });
   } catch (error) { flash(error.message); }
 }
 function storyForm(project) {
