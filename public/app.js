@@ -133,8 +133,42 @@ async function storiesDialog(project) {
   try {
     const stories = await api(`/projects/${project.id}/stories`);
     const canCreate = !project.archived && state.user.role === 'Product Owner' && project.owner_id === state.user.id;
-    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'}</p>${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button>' : ''}${stories.length ? `<div class="story-list">${stories.map(story => `<article class="story"><small>HU-${story.id}</small><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><div class="story-points"><span>Puntos de historia</span>${state.user.role === 'Developer' && !project.archived ? `<select aria-label="Puntos de ${escape(story.title)}" data-estimate="${story.id}"><option value="" disabled ${story.points == null ? 'selected' : ''}>Sin estimar</option>${[1,2,3,5,8,13,21].map(points => `<option value="${points}" ${story.points === points ? 'selected' : ''}>${points}</option>`).join('')}</select>` : `<strong>${story.points ?? 'Sin estimar'}</strong>`}</div><strong>Criterios de aceptación</strong><ul>${story.criteria.map(criterion => `<li>${escape(criterion)}</li>`).join('')}</ul></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
+    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'}</p>${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button>' : ''}${stories.length ? `<div class="story-list">${stories.map(story => `<article class="story" data-story="${story.id}" draggable="${canCreate}"><div class="story-toolbar"><small>HU-${story.id}</small>${canCreate ? `<div><button class="quiet" data-move="${story.id}" data-direction="-1" aria-label="Subir ${escape(story.title)}" ${stories[0].id === story.id ? 'disabled' : ''}>↑</button><button class="quiet" data-move="${story.id}" data-direction="1" aria-label="Bajar ${escape(story.title)}" ${stories.at(-1).id === story.id ? 'disabled' : ''}>↓</button></div>` : ''}</div><div class="story-priority">${canCreate ? `<select aria-label="Prioridad de ${escape(story.title)}" data-priority="${story.id}">${['Must have','Should have','Could have','Won’t have'].map(priority => `<option ${story.priority === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select>` : badge(story.priority)}</div><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><div class="story-points"><span>Puntos de historia</span>${state.user.role === 'Developer' && !project.archived ? `<select aria-label="Puntos de ${escape(story.title)}" data-estimate="${story.id}"><option value="" disabled ${story.points == null ? 'selected' : ''}>Sin estimar</option>${[1,2,3,5,8,13,21].map(points => `<option value="${points}" ${story.points === points ? 'selected' : ''}>${points}</option>`).join('')}</select>` : `<strong>${story.points ?? 'Sin estimar'}</strong>`}</div><strong>Criterios de aceptación</strong><ul>${story.criteria.map(criterion => `<li>${escape(criterion)}</li>`).join('')}</ul></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
     document.querySelector('#new-story')?.addEventListener('click', () => storyForm(project));
+    const saveOrder = async order => {
+      try { await api(`/projects/${project.id}/stories/order`, 'PATCH', { order }); }
+      catch (error) { flash(error.message); }
+      await storiesDialog(project);
+    };
+    document.querySelectorAll('[data-move]').forEach(button => button.onclick = () => {
+      const order = stories.map(story => story.id);
+      const index = order.indexOf(Number(button.dataset.move));
+      const next = index + Number(button.dataset.direction);
+      if (next < 0 || next >= order.length) return;
+      [order[index], order[next]] = [order[next], order[index]];
+      saveOrder(order);
+    });
+    document.querySelectorAll('[data-priority]').forEach(input => input.onchange = async () => {
+      input.disabled = true;
+      try { await api(`/projects/${project.id}/stories/${input.dataset.priority}/priority`, 'PATCH', { priority: input.value }); }
+      catch (error) { flash(error.message); }
+      await storiesDialog(project);
+    });
+    if (canCreate) {
+      let dragged;
+      document.querySelectorAll('[data-story]').forEach(card => {
+        card.ondragstart = event => { dragged = Number(card.dataset.story); event.dataTransfer.setData('text/plain', String(dragged)); card.classList.add('dragging'); };
+        card.ondragend = () => { dragged = null; card.classList.remove('dragging'); };
+        card.ondragover = event => { if (dragged) event.preventDefault(); };
+        card.ondrop = event => {
+          event.preventDefault();
+          if (!dragged || dragged === Number(card.dataset.story)) return;
+          const order = stories.map(story => story.id).filter(id => id !== dragged);
+          order.splice(order.indexOf(Number(card.dataset.story)), 0, dragged);
+          saveOrder(order);
+        };
+      });
+    }
     document.querySelectorAll('[data-estimate]').forEach(input => input.onchange = async () => {
       input.disabled = true;
       try {
