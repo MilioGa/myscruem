@@ -7,5 +7,8 @@
 .story-points{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:18px;font-size:12px}.story-points select{width:110px}
 
 .story-toolbar{display:flex;justify-content:space-between;align-items:center}.story-priority{margin:8px 0 12px}.story-priority select{font-size:12px}.story.dragging{opacity:.45}.story[draggable=true]{cursor:grab}
+<<<<<<< HEAD
 
 .card-footer>div{display:flex;flex-wrap:wrap;justify-content:flex-end}.sprint-dates{display:grid;grid-template-columns:1fr 1fr;gap:15px}
+=======
+>>>>>>> 2697d687d30710de9d4e8354c0b025a597eae518
