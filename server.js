@@ -47,6 +47,20 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE REFERENCES users(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS stories (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), title TEXT NOT NULL, actor TEXT NOT NULL, goal TEXT NOT NULL, benefit TEXT NOT NULL, criteria TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'points')) {
+    db.exec('ALTER TABLE stories ADD COLUMN points INTEGER CHECK(points IN (1,2,3,5,8,13,21))');
+  }
+  const storyColumns = db.prepare('PRAGMA table_info(stories)').all().map(column => column.name);
+  if (!storyColumns.includes('priority')) db.exec("ALTER TABLE stories ADD COLUMN priority TEXT NOT NULL DEFAULT 'Must have' CHECK(priority IN ('Must have','Should have','Could have','Won’t have'))");
+  if (!storyColumns.includes('position')) {
+    db.exec('ALTER TABLE stories ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
+    db.exec('UPDATE stories SET position=id');
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sprints (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, goal TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'En planificación' CHECK(status IN ('En planificación','Activo','Cerrado')));
+    CREATE UNIQUE INDEX IF NOT EXISTS one_active_sprint ON sprints(project_id) WHERE status='Activo';
+  `);
+  db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -214,7 +228,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   });
   app.get('/api/projects/:id/stories', auth, (req, res) => {
     const project = projectFor(req);
-    const stories = all('SELECT * FROM stories WHERE project_id=? ORDER BY id', project.id);
+    const stories = all('SELECT stories.*,sprint_stories.sprint_id FROM stories LEFT JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE stories.project_id=? ORDER BY position,id', project.id);
     res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })));
   });
   app.post('/api/projects/:id/stories', auth, (req, res) => {
@@ -227,8 +241,91 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const benefit = text(req.body.benefit, 'Para', 1000);
     if (!Array.isArray(req.body.criteria) || !req.body.criteria.length || req.body.criteria.length > 20) fail('Agrega entre 1 y 20 criterios de aceptación.');
     const criteria = req.body.criteria.map(value => text(value, 'Criterio de aceptación', 1000));
-    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria) VALUES (?,?,?,?,?,?)', project.id, title, actor, goal, benefit, JSON.stringify(criteria)).lastInsertRowid);
+    const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM stories WHERE project_id=?', project.id).next;
+    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria,position) VALUES (?,?,?,?,?,?,?)', project.id, title, actor, goal, benefit, JSON.stringify(criteria), position).lastInsertRowid);
     res.status(201).json({ id });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/estimate', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede estimar historias.', 403);
+    if (project.archived) fail('No se pueden estimar historias de un proyecto archivado.');
+    if (!get('SELECT id FROM stories WHERE id=? AND project_id=?', req.params.storyId, project.id)) fail('Historia no encontrada.', 404);
+    if (![1, 2, 3, 5, 8, 13, 21].includes(req.body.points)) fail('Selecciona 1, 2, 3, 5, 8, 13 o 21 puntos.');
+    if (req.body.points > 13 && get('SELECT story_id FROM sprint_stories WHERE story_id=?', req.params.storyId)) fail('Una historia comprometida no puede superar 13 puntos.');
+    run('UPDATE stories SET points=? WHERE id=?', req.body.points, req.params.storyId);
+    res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/order', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede ordenar el backlog.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const ids = all('SELECT id FROM stories WHERE project_id=?', project.id).map(story => story.id);
+    const order = req.body.order;
+    if (!Array.isArray(order) || order.length !== ids.length || new Set(order).size !== ids.length || order.some(id => !ids.includes(id))) fail('La lista de historias cambió. Actualiza el backlog.', 409);
+    transaction(() => order.forEach((id, index) => run('UPDATE stories SET position=? WHERE id=? AND project_id=?', index + 1, id, project.id)));
+    res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/priority', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede cambiar prioridades.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    if (!get('SELECT id FROM stories WHERE id=? AND project_id=?', req.params.storyId, project.id)) fail('Historia no encontrada.', 404);
+    if (!['Must have', 'Should have', 'Could have', 'Won’t have'].includes(req.body.priority)) fail('Selecciona una prioridad MoSCoW válida.');
+    run('UPDATE stories SET priority=? WHERE id=?', req.body.priority, req.params.storyId);
+    res.json({ ok: true });
+  });
+  app.get('/api/projects/:id/sprints', auth, (req, res) => {
+    const project = projectFor(req);
+    res.json(all('SELECT * FROM sprints WHERE project_id=? ORDER BY start_date DESC,id DESC', project.id));
+  });
+  app.post('/api/projects/:id/sprints', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede crear sprints.', 403);
+    if (project.archived) fail('No se pueden crear sprints en un proyecto archivado.');
+    const name = text(req.body.name, 'Nombre');
+    const goal = text(req.body.goal, 'Meta del sprint', 2000);
+    const start = req.body.startDate;
+    const end = req.body.endDate;
+    const validDate = value => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const date = new Date(value + 'T00:00:00Z');
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    };
+    if (!validDate(start) || !validDate(end) || end <= start) fail('La fecha final debe ser posterior a la inicial y ambas deben ser válidas.');
+    const id = Number(run('INSERT INTO sprints(project_id,name,start_date,end_date,goal) VALUES (?,?,?,?,?)', project.id, name, start, end, goal).lastInsertRowid);
+    res.status(201).json({ id });
+  });
+  const sprintFor = req => {
+    const project = projectFor(req);
+    const sprint = get('SELECT * FROM sprints WHERE id=? AND project_id=?', req.params.sprintId, project.id);
+    if (!sprint) fail('Sprint no encontrado.', 404);
+    return { project, sprint };
+  };
+  app.get('/api/projects/:id/sprints/:sprintId/stories', auth, (req, res) => {
+    const { project, sprint } = sprintFor(req);
+    const stories = all('SELECT stories.* FROM stories JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE sprint_stories.sprint_id=? AND stories.project_id=? ORDER BY position,id', sprint.id, project.id);
+    res.json({ stories: stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })), points: stories.reduce((sum, story) => sum + (story.points || 0), 0) });
+  });
+  const planningFor = req => {
+    const current = sprintFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede seleccionar historias.', 403);
+    if (current.project.archived || current.sprint.status !== 'En planificación') fail('El sprint debe pertenecer a un proyecto activo y estar en planificación.');
+    return current;
+  };
+  app.post('/api/projects/:id/sprints/:sprintId/stories', auth, (req, res) => {
+    const { project, sprint } = planningFor(req);
+    const story = get('SELECT * FROM stories WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    if (!story.points || story.points > 13) fail('La historia debe estar estimada y no superar 13 puntos.');
+    if (get('SELECT story_id FROM sprint_stories WHERE story_id=?', story.id)) fail('La historia ya está seleccionada en un sprint.', 409);
+    run('INSERT INTO sprint_stories(sprint_id,story_id) VALUES (?,?)', sprint.id, story.id);
+    res.status(201).json({ ok: true });
+  });
+  app.delete('/api/projects/:id/sprints/:sprintId/stories/:storyId', auth, (req, res) => {
+    const { sprint } = planningFor(req);
+    const removed = run('DELETE FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, req.params.storyId);
+    if (!removed.changes) fail('La historia no pertenece a este sprint.', 404);
+    res.json({ ok: true });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
