@@ -56,6 +56,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     db.exec('ALTER TABLE stories ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
     db.exec('UPDATE stories SET position=id');
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sprints (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, goal TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'En planificación' CHECK(status IN ('En planificación','Activo','Cerrado')));
+    CREATE UNIQUE INDEX IF NOT EXISTS one_active_sprint ON sprints(project_id) WHERE status='Activo';
+  `);
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -267,6 +271,27 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!['Must have', 'Should have', 'Could have', 'Won’t have'].includes(req.body.priority)) fail('Selecciona una prioridad MoSCoW válida.');
     run('UPDATE stories SET priority=? WHERE id=?', req.body.priority, req.params.storyId);
     res.json({ ok: true });
+  });
+  app.get('/api/projects/:id/sprints', auth, (req, res) => {
+    const project = projectFor(req);
+    res.json(all('SELECT * FROM sprints WHERE project_id=? ORDER BY start_date DESC,id DESC', project.id));
+  });
+  app.post('/api/projects/:id/sprints', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede crear sprints.', 403);
+    if (project.archived) fail('No se pueden crear sprints en un proyecto archivado.');
+    const name = text(req.body.name, 'Nombre');
+    const goal = text(req.body.goal, 'Meta del sprint', 2000);
+    const start = req.body.startDate;
+    const end = req.body.endDate;
+    const validDate = value => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const date = new Date(value + 'T00:00:00Z');
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    };
+    if (!validDate(start) || !validDate(end) || end <= start) fail('La fecha final debe ser posterior a la inicial y ambas deben ser válidas.');
+    const id = Number(run('INSERT INTO sprints(project_id,name,start_date,end_date,goal) VALUES (?,?,?,?,?)', project.id, name, start, end, goal).lastInsertRowid);
+    res.status(201).json({ id });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
