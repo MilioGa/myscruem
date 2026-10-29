@@ -34,7 +34,7 @@ const password = value => {
   return value;
 };
 
-export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', 'myscruem.sqlite'), sessionMs = 30 * 60 * 1000 } = {}) {
+export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', 'myscruem.sqlite'), sessionMs = 30 * 60 * 1000, now = () => new Date() } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`
@@ -60,6 +60,14 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS sprints (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, goal TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'En planificación' CHECK(status IN ('En planificación','Activo','Cerrado')));
     CREATE UNIQUE INDEX IF NOT EXISTS one_active_sprint ON sprints(project_id) WHERE status='Activo';
   `);
+  db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
+  const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER']]) {
+    if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
+  }
+  if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
+    db.exec('ALTER TABLE sprint_stories ADD COLUMN completed INTEGER NOT NULL DEFAULT 0');
+  }
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -227,7 +235,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   });
   app.get('/api/projects/:id/stories', auth, (req, res) => {
     const project = projectFor(req);
-    const stories = all('SELECT * FROM stories WHERE project_id=? ORDER BY position,id', project.id);
+    const stories = all('SELECT stories.*,sprint_stories.sprint_id FROM stories LEFT JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE stories.project_id=? ORDER BY position,id', project.id);
     res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })));
   });
   app.post('/api/projects/:id/stories', auth, (req, res) => {
@@ -250,6 +258,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (project.archived) fail('No se pueden estimar historias de un proyecto archivado.');
     if (!get('SELECT id FROM stories WHERE id=? AND project_id=?', req.params.storyId, project.id)) fail('Historia no encontrada.', 404);
     if (![1, 2, 3, 5, 8, 13, 21].includes(req.body.points)) fail('Selecciona 1, 2, 3, 5, 8, 13 o 21 puntos.');
+    if (req.body.points > 13 && get('SELECT story_id FROM sprint_stories WHERE story_id=?', req.params.storyId)) fail('Una historia comprometida no puede superar 13 puntos.');
     run('UPDATE stories SET points=? WHERE id=?', req.body.points, req.params.storyId);
     res.json({ ok: true });
   });
@@ -292,6 +301,66 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!validDate(start) || !validDate(end) || end <= start) fail('La fecha final debe ser posterior a la inicial y ambas deben ser válidas.');
     const id = Number(run('INSERT INTO sprints(project_id,name,start_date,end_date,goal) VALUES (?,?,?,?,?)', project.id, name, start, end, goal).lastInsertRowid);
     res.status(201).json({ id });
+  });
+  const sprintFor = req => {
+    const project = projectFor(req);
+    const sprint = get('SELECT * FROM sprints WHERE id=? AND project_id=?', req.params.sprintId, project.id);
+    if (!sprint) fail('Sprint no encontrado.', 404);
+    return { project, sprint };
+  };
+  app.get('/api/projects/:id/sprints/:sprintId/stories', auth, (req, res) => {
+    const { project, sprint } = sprintFor(req);
+    const stories = all('SELECT stories.*,sprint_stories.completed FROM stories JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE sprint_stories.sprint_id=? AND stories.project_id=? ORDER BY position,id', sprint.id, project.id);
+    res.json({ stories: stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })), points: stories.reduce((sum, story) => sum + (story.points || 0), 0) });
+  });
+  const planningFor = req => {
+    const current = sprintFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede seleccionar historias.', 403);
+    if (current.project.archived || current.sprint.status !== 'En planificación') fail('El sprint debe pertenecer a un proyecto activo y estar en planificación.');
+    return current;
+  };
+  app.post('/api/projects/:id/sprints/:sprintId/stories', auth, (req, res) => {
+    const { project, sprint } = planningFor(req);
+    const story = get('SELECT * FROM stories WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    if (!story.points || story.points > 13) fail('La historia debe estar estimada y no superar 13 puntos.');
+    if (get('SELECT story_id FROM sprint_stories WHERE story_id=?', story.id)) fail('La historia ya está seleccionada en un sprint.', 409);
+    run('INSERT INTO sprint_stories(sprint_id,story_id) VALUES (?,?)', sprint.id, story.id);
+    res.status(201).json({ ok: true });
+  });
+  app.delete('/api/projects/:id/sprints/:sprintId/stories/:storyId', auth, (req, res) => {
+    const { sprint } = planningFor(req);
+    const removed = run('DELETE FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, req.params.storyId);
+    if (!removed.changes) fail('La historia no pertenece a este sprint.', 404);
+    res.json({ ok: true });
+  });
+  const masterFor = req => {
+    const current = sprintFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede iniciar o cerrar sprints.', 403);
+    if (current.project.archived) fail('El proyecto está archivado.');
+    return current;
+  };
+  const sprintPoints = sprintId => get('SELECT COUNT(*) AS total, COALESCE(SUM(stories.points),0) AS points, COALESCE(SUM(CASE WHEN sprint_stories.completed=1 THEN stories.points ELSE 0 END),0) AS completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprintId);
+  app.post('/api/projects/:id/sprints/:sprintId/start', auth, (req, res) => {
+    const { project, sprint } = masterFor(req);
+    if (sprint.status !== 'En planificación') fail('Solo se puede iniciar un sprint en planificación.');
+    const committed = sprintPoints(sprint.id);
+    if (!committed.total) fail('Selecciona al menos una historia antes de iniciar el sprint.');
+    if (get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id)) fail('El proyecto ya tiene un sprint activo.', 409);
+    run("UPDATE sprints SET status='Activo',started_at=?,committed_points=? WHERE id=?", now().toISOString(), committed.points, sprint.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/sprints/:sprintId/close', auth, (req, res) => {
+    const { sprint } = masterFor(req);
+    if (sprint.status !== 'Activo') fail('Solo se puede cerrar un sprint activo.');
+    const summary = transaction(() => {
+      const points = sprintPoints(sprint.id);
+      const committed = sprint.committed_points ?? points.points;
+      const returned = run('DELETE FROM sprint_stories WHERE sprint_id=? AND completed=0', sprint.id).changes;
+      run("UPDATE sprints SET status='Cerrado',closed_at=?,committed_points=?,completed_points=? WHERE id=?", now().toISOString(), committed, points.completed, sprint.id);
+      return { committed, completed: points.completed, returned: Number(returned) };
+    });
+    res.json(summary);
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
