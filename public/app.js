@@ -92,6 +92,7 @@ function renderContent() {
   document.querySelectorAll('[data-sprints]').forEach(button => button.onclick = () => sprintsDialog(state.projects.find(p => p.id === Number(button.dataset.sprints))));
 }
 function dialog(title, content, onSubmit) {
+  modal.className = '';
   modal.innerHTML = `<div class="modal-heading"><h2>${escape(title)}</h2><button class="quiet" id="close-modal" aria-label="Cerrar">×</button></div>${content}`;
   document.querySelector('#close-modal').onclick = () => modal.close();
   if (!modal.open) modal.showModal();
@@ -190,8 +191,35 @@ function storyForm(project) {
 async function sprintsDialog(project) {
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
-    dialog('Sprints del proyecto', `<p class="muted">${escape(project.name)}</p>${state.user.role === 'Scrum Master' && !project.archived ? '<button id="new-sprint" class="primary">+ Nuevo sprint</button>' : ''}${sprints.length ? `<div class="story-list">${sprints.map(sprint => `<article class="story"><h3>${escape(sprint.name)}</h3>${badge(sprint.status)}<p>${escape(sprint.start_date)} al ${escape(sprint.end_date)}</p><p class="project-description">${escape(sprint.goal)}</p></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene sprints.</p>'}`);
+    dialog('Sprints del proyecto', `<p class="muted">${escape(project.name)}</p>${state.user.role === 'Scrum Master' && !project.archived ? '<button id="new-sprint" class="primary">+ Nuevo sprint</button>' : ''}${sprints.length ? `<div class="story-list">${sprints.map(sprint => `<article class="story"><h3>${escape(sprint.name)}</h3>${badge(sprint.status)}<p>${escape(sprint.start_date)} al ${escape(sprint.end_date)}</p><p class="project-description">${escape(sprint.goal)}</p>${sprint.status === 'Cerrado' ? `<p class="muted">Completados ${sprint.completed_points ?? 0} de ${sprint.committed_points ?? 0} puntos</p>` : ''}<div class="sprint-actions"><button class="quiet" data-plan="${sprint.id}">${state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación' ? 'Planificar' : 'Ver historias'}</button>${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'En planificación' ? `<button class="primary" data-start="${sprint.id}">Iniciar sprint</button>` : ''}${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'Activo' ? `<button class="primary" data-close="${sprint.id}">Cerrar sprint</button>` : ''}</div></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene sprints.</p>'}`);
     document.querySelector('#new-sprint')?.addEventListener('click', () => sprintForm(project));
+    document.querySelectorAll('[data-plan]').forEach(button => button.onclick = () => planningDialog(project, sprints.find(sprint => sprint.id === Number(button.dataset.plan))));
+    document.querySelectorAll('[data-start]').forEach(button => button.onclick = async () => {
+      button.disabled = true;
+      try { await api(`/projects/${project.id}/sprints/${button.dataset.start}/start`, 'POST'); flash('Sprint iniciado. El tablero está disponible.'); }
+      catch (error) { flash(error.message); }
+      await sprintsDialog(project);
+    });
+    document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => closeDialog(project, sprints.find(sprint => sprint.id === Number(button.dataset.close))));
+  } catch (error) { flash(error.message); }
+}
+async function closeDialog(project, sprint) {
+  try {
+    const result = await api(`/projects/${project.id}/sprints/${sprint.id}/stories`);
+    const done = result.stories.filter(story => story.completed);
+    const pending = result.stories.filter(story => !story.completed);
+    const completed = done.reduce((sum, story) => sum + (story.points || 0), 0);
+    const item = story => `<article class="planning-story"><strong>${escape(story.title)}</strong><small>${story.points ?? 0} puntos</small></article>`;
+    dialog(`Cerrar ${sprint.name}`, `<p class="muted">Revisa el resumen antes de confirmar el cierre.</p><div class="close-stats"><div><small>Puntos comprometidos</small><strong>${sprint.committed_points ?? result.points}</strong></div><div><small>Puntos completados</small><strong>${completed}</strong></div></div><h3>Historias terminadas</h3>${done.length ? done.map(item).join('') : '<p class="muted">Ninguna historia está terminada.</p>'}<h3>Regresan al Product Backlog</h3>${pending.length ? pending.map(item).join('') : '<p class="muted">No hay historias pendientes.</p>'}<div class="story-actions"><button id="back-sprint-list" class="quiet">Cancelar</button><button id="confirm-close" class="primary">Confirmar cierre</button></div>`);
+    document.querySelector('#back-sprint-list').onclick = () => sprintsDialog(project);
+    document.querySelector('#confirm-close').onclick = async event => {
+      event.target.disabled = true;
+      try {
+        const summary = await api(`/projects/${project.id}/sprints/${sprint.id}/close`, 'POST');
+        flash(`Sprint cerrado: ${summary.completed} de ${summary.committed} puntos completados; ${summary.returned} historias regresan al backlog.`);
+      } catch (error) { flash(error.message); }
+      await sprintsDialog(project);
+    };
   } catch (error) { flash(error.message); }
 }
 function sprintForm(project) {
@@ -201,6 +229,27 @@ function sprintForm(project) {
     flash('Sprint creado.');
   });
   document.querySelector('#back-sprints').onclick = () => sprintsDialog(project);
+}
+async function planningDialog(project, sprint) {
+  try {
+    const selected = await api(`/projects/${project.id}/sprints/${sprint.id}/stories`);
+    const allStories = await api(`/projects/${project.id}/stories`);
+    const available = allStories.filter(story => !story.sprint_id);
+    const editable = state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación';
+    const row = (story, included) => `<article class="planning-story"><div><strong>${escape(story.title)}</strong><small>${escape(story.priority)} · ${story.points ?? 'Sin estimar'} puntos</small></div>${editable ? `<button class="quiet" data-selection="${story.id}" data-included="${included}" ${!included && (!story.points || story.points > 13) ? 'disabled' : ''} aria-label="${included ? 'Retirar' : 'Agregar'} ${escape(story.title)}">${included ? '−' : '+'}</button>` : ''}</article>`;
+    dialog('Sprint Backlog', `<p class="muted">${escape(project.name)} · ${escape(sprint.name)}</p><p class="project-description">${escape(sprint.goal)}</p><div class="planning-columns"><section><h3>Product Backlog</h3>${available.length ? available.map(story => row(story, false)).join('') : '<p class="muted">No hay historias disponibles.</p>'}</section><section><h3>Historias seleccionadas</h3>${selected.stories.length ? selected.stories.map(story => row(story, true)).join('') : '<p class="muted">Aún no se han seleccionado historias.</p>'}</section></div><div class="planning-total"><strong>${selected.points} puntos comprometidos</strong><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>${editable ? '<p class="muted">Cada cambio se guarda automáticamente. Solo se pueden seleccionar historias estimadas de hasta 13 puntos.</p>' : ''}`);
+    modal.classList.add('planning-modal');
+    document.querySelector('#back-sprint-list').onclick = () => sprintsDialog(project);
+    document.querySelectorAll('[data-selection]').forEach(button => button.onclick = async () => {
+      button.disabled = true;
+      try {
+        const path = `/projects/${project.id}/sprints/${sprint.id}/stories`;
+        if (button.dataset.included === 'true') await api(`${path}/${button.dataset.selection}`, 'DELETE');
+        else await api(path, 'POST', { storyId: Number(button.dataset.selection) });
+      } catch (error) { flash(error.message); }
+      await planningDialog(project, sprint);
+    });
+  } catch (error) { flash(error.message); }
 }
 if (new URLSearchParams(location.search).has('invitation')) authView('activate');
 else load().catch(() => authView());
