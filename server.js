@@ -68,6 +68,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
     db.exec('ALTER TABLE sprint_stories ADD COLUMN completed INTEGER NOT NULL DEFAULT 0');
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL REFERENCES stories(id), title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', assignee_id INTEGER NOT NULL REFERENCES users(id), status TEXT NOT NULL DEFAULT 'Por hacer' CHECK(status IN ('Por hacer','En curso','En revisión','Terminado')), position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+  `);
+  const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -361,6 +365,15 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       return { committed, completed: points.completed, returned: Number(returned) };
     });
     res.json(summary);
+  });
+  app.get('/api/projects/:id/board', auth, (req, res) => {
+    const project = projectFor(req);
+    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [] });
+    const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
+    const tasks = all('SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE tasks.sprint_id=? ORDER BY tasks.position,tasks.id', sprint.id);
+    const members = all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", req.user.company_id);
+    res.json({ sprint, columns, stories, tasks, members });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
