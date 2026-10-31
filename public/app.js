@@ -75,7 +75,7 @@ function renderContent() {
   const items = source.filter(item => (users || (state.filter === 'archived' ? item.archived : !item.archived)) && `${item.name} ${item.email || item.description}`.toLowerCase().includes(state.query.toLowerCase()));
   const target = document.querySelector('#page-content');
   target.innerHTML = `<div class="toolbar">${users ? `<span>${state.users.length} usuarios en la empresa</span>` : `<div class="tabs"><button data-filter="active" class="${state.filter === 'active' ? 'active' : ''}">Activos <span>${state.projects.filter(p => !p.archived).length}</span></button><button data-filter="archived" class="${state.filter === 'archived' ? 'active' : ''}">Archivados <span>${state.projects.filter(p => p.archived).length}</span></button></div>`}<input id="search" aria-label="${users ? 'Buscar usuarios' : 'Buscar proyectos'}" placeholder="${users ? 'Buscar por nombre o correo…' : 'Buscar proyectos…'}" value="${escape(state.query)}"></div>
-  ${!items.length ? `<section class="empty"><div class="empty-icon">${users ? '♧' : '▦'}</div><h2>${state.query ? 'No encontramos coincidencias' : users ? 'No hay usuarios' : state.filter === 'archived' ? 'No hay proyectos archivados' : 'Aquí comienza tu próximo proyecto'}</h2><p>${state.query ? 'Prueba con otro nombre.' : users ? 'Invita a una persona para empezar.' : state.filter === 'archived' ? 'Los proyectos que archives seguirán disponibles aquí.' : state.user.role === 'Product Owner' ? 'Crea tu primer proyecto y dale un espacio a tus ideas.' : state.user.role === 'Administrador' ? 'Invita a un Product Owner para que cree el primer proyecto.' : 'Los proyectos de tu empresa aparecerán aquí.'}</p></section>` : users ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${items.map(user => `<tr><td><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></td><td>${escape(user.role)}</td><td>${badge(user.status, user.status === 'Activo' ? 'green' : '')}</td><td><button class="quiet" data-user="${user.id}">Editar</button>${user.status === 'Pendiente' ? `<button class="quiet" data-invite="${user.id}">Invitación</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="project-grid">${items.map(p => `<article class="project-card"><div class="card-top"><div class="project-icon">▦</div>${badge(p.archived ? 'Archivado' : 'Activo', p.archived ? '' : 'green')}</div><h2>${escape(p.name)}</h2><p>${escape(p.description)}</p><div class="project-owner"><div class="avatar">${escape(p.owner.slice(0, 1))}</div><div><small>PRODUCT OWNER</small><strong>${escape(p.owner)}</strong></div></div><div class="card-footer"><small>${new Date(p.created_at + 'Z').toLocaleDateString('es-MX')}</small><div><button class="quiet" data-sprints="${p.id}">Sprints</button><button class="quiet" data-backlog="${p.id}">Historias</button><button class="quiet" data-project="${p.id}">Ver proyecto →</button></div></div></article>`).join('')}</div>`}`;
+  ${!items.length ? `<section class="empty"><div class="empty-icon">${users ? '♧' : '▦'}</div><h2>${state.query ? 'No encontramos coincidencias' : users ? 'No hay usuarios' : state.filter === 'archived' ? 'No hay proyectos archivados' : 'Aquí comienza tu próximo proyecto'}</h2><p>${state.query ? 'Prueba con otro nombre.' : users ? 'Invita a una persona para empezar.' : state.filter === 'archived' ? 'Los proyectos que archives seguirán disponibles aquí.' : state.user.role === 'Product Owner' ? 'Crea tu primer proyecto y dale un espacio a tus ideas.' : state.user.role === 'Administrador' ? 'Invita a un Product Owner para que cree el primer proyecto.' : 'Los proyectos de tu empresa aparecerán aquí.'}</p></section>` : users ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${items.map(user => `<tr><td><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></td><td>${escape(user.role)}</td><td>${badge(user.status, user.status === 'Activo' ? 'green' : '')}</td><td><button class="quiet" data-user="${user.id}">Editar</button>${user.status === 'Pendiente' ? `<button class="quiet" data-invite="${user.id}">Invitación</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="project-grid">${items.map(p => `<article class="project-card"><div class="card-top"><div class="project-icon">▦</div>${badge(p.archived ? 'Archivado' : 'Activo', p.archived ? '' : 'green')}</div><h2>${escape(p.name)}</h2><p>${escape(p.description)}</p><div class="project-owner"><div class="avatar">${escape(p.owner.slice(0, 1))}</div><div><small>PRODUCT OWNER</small><strong>${escape(p.owner)}</strong></div></div><div class="card-footer"><small>${new Date(p.created_at + 'Z').toLocaleDateString('es-MX')}</small><div><button class="quiet" data-board="${p.id}">Tablero</button><button class="quiet" data-sprints="${p.id}">Sprints</button><button class="quiet" data-backlog="${p.id}">Historias</button><button class="quiet" data-project="${p.id}">Ver proyecto →</button></div></div></article>`).join('')}</div>`}`;
   document.querySelector('#search').oninput = event => {
     const position = event.target.selectionStart;
     state.query = event.target.value;
@@ -90,6 +90,7 @@ function renderContent() {
   document.querySelectorAll('[data-project]').forEach(button => button.onclick = () => projectDialog(state.projects.find(p => p.id === Number(button.dataset.project))));
   document.querySelectorAll('[data-backlog]').forEach(button => button.onclick = () => storiesDialog(state.projects.find(p => p.id === Number(button.dataset.backlog))));
   document.querySelectorAll('[data-sprints]').forEach(button => button.onclick = () => sprintsDialog(state.projects.find(p => p.id === Number(button.dataset.sprints))));
+  document.querySelectorAll('[data-board]').forEach(button => button.onclick = () => boardDialog(state.projects.find(p => p.id === Number(button.dataset.board))));
 }
 function dialog(title, content, onSubmit) {
   modal.className = '';
@@ -249,6 +250,25 @@ async function planningDialog(project, sprint) {
       } catch (error) { flash(error.message); }
       await planningDialog(project, sprint);
     });
+  } catch (error) { flash(error.message); }
+}
+async function boardDialog(project) {
+  try {
+    const board = await api(`/projects/${project.id}/board`);
+    if (!board.sprint) {
+      dialog('Tablero Kanban', `<p class="muted">${escape(project.name)}</p><section class="empty"><div class="empty-icon">▦</div><h2>No hay un sprint activo</h2><p>El tablero se habilita cuando el Scrum Master inicia un sprint.</p></section>`);
+      return;
+    }
+    const stories = new Map(board.stories.map(story => [story.id, story]));
+    const card = task => `<article class="task-card" data-task="${task.id}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const grouped = new Map(board.columns.map(name => [name, []]));
+    for (const task of board.tasks) grouped.get(task.status)?.push(task);
+    const column = name => {
+      const tasks = grouped.get(name);
+      return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
+    };
+    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"></div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
+    modal.classList.add('board-modal');
   } catch (error) { flash(error.message); }
 }
 if (new URLSearchParams(location.search).has('invitation')) authView('activate');
