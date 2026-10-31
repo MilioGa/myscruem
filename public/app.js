@@ -261,8 +261,10 @@ async function boardDialog(project) {
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
     const card = task => `<article class="task-card" data-task="${task.id}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const grouped = new Map(board.columns.map(name => [name, []]));
+    for (const task of board.tasks) grouped.get(task.status)?.push(task);
     const column = name => {
-      const tasks = board.tasks.filter(task => task.status === name);
+      const tasks = grouped.get(name);
       return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
     };
     dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"></div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
