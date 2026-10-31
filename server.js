@@ -376,6 +376,28 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const members = all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", req.user.company_id);
     res.json({ sprint, columns, stories, tasks, members });
   });
+  const activeTaskFor = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede modificar tareas del tablero.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const task = get("SELECT tasks.* FROM tasks JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.id=? AND sprints.project_id=? AND sprints.status='Activo'", Number(req.params.taskId) || 0, project.id);
+    if (!task) fail('Tarea no encontrada en el sprint activo.', 404);
+    return task;
+  };
+  const refreshStory = (sprintId, storyId) => {
+    const progress = get("SELECT COUNT(*) AS total, SUM(status='Terminado') AS done FROM tasks WHERE sprint_id=? AND story_id=?", sprintId, storyId);
+    run('UPDATE sprint_stories SET completed=? WHERE sprint_id=? AND story_id=?', progress.total > 0 && progress.done === progress.total ? 1 : 0, sprintId, storyId);
+  };
+  app.patch('/api/projects/:id/tasks/:taskId/status', auth, (req, res) => {
+    const task = activeTaskFor(req);
+    if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
+    transaction(() => {
+      const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
+      run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
+      refreshStory(task.sprint_id, task.story_id);
+    });
+    res.json({ ok: true });
+  });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
   app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.status ? error.message : 'No fue posible completar la operación.' }));
@@ -386,4 +408,3 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const { app } = createApp();
   app.listen(Number(process.env.PORT || 3000), '127.0.0.1', () => console.log(`MySCruEm: http://localhost:${process.env.PORT || 3000}`));
 }
-
