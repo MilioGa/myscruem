@@ -260,7 +260,8 @@ async function boardDialog(project) {
       return;
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
-    const card = task => `<article class="task-card" data-task="${task.id}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const canMove = state.user.role === 'Developer' && !project.archived;
+    const card = task => `<article class="task-card" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
     const grouped = new Map(board.columns.map(name => [name, []]));
     for (const task of board.tasks) grouped.get(task.status)?.push(task);
     const column = name => {
@@ -269,6 +270,27 @@ async function boardDialog(project) {
     };
     dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"></div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    if (canMove) {
+      let dragged;
+      document.querySelectorAll('[data-task]').forEach(item => {
+        item.ondragstart = event => { dragged = item; event.dataTransfer.setData('text/plain', item.dataset.task); item.classList.add('dragging'); };
+        item.ondragend = () => { item.classList.remove('dragging'); dragged = null; };
+      });
+      document.querySelectorAll('[data-column]').forEach(area => {
+        area.ondragover = event => { if (dragged) { event.preventDefault(); area.classList.add('drop-target'); } };
+        area.ondragleave = () => area.classList.remove('drop-target');
+        area.ondrop = async event => {
+          event.preventDefault();
+          area.classList.remove('drop-target');
+          const task = board.tasks.find(item => item.id === Number(dragged?.dataset.task));
+          if (!task || task.status === area.dataset.column) return;
+          area.querySelector('.board-cards').append(dragged);
+          try { await api(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status: area.dataset.column }); }
+          catch (error) { flash(error.message); }
+          await boardDialog(project);
+        };
+      });
+    }
   } catch (error) { flash(error.message); }
 }
 if (new URLSearchParams(location.search).has('invitation')) authView('activate');
