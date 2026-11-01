@@ -62,7 +62,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
-  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER']]) {
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0']]) {
     if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
   }
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
@@ -369,12 +369,17 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   });
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
-    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [] });
     const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
     const tasks = all('SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE tasks.sprint_id=? ORDER BY tasks.position,tasks.id', sprint.id);
     const members = all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", req.user.company_id);
     res.json({ sprint, columns, stories, tasks, members });
+  });
+  app.get('/api/projects/:id/board/version', auth, (req, res) => {
+    const project = projectFor(req);
+    const sprint = get("SELECT id,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    res.json({ sprintId: sprint?.id ?? null, version: sprint?.board_version ?? 0 });
   });
   const activeTaskFor = req => {
     const project = projectFor(req);
@@ -395,6 +400,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
       run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
       refreshStory(task.sprint_id, task.story_id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
     });
     res.json({ ok: true });
   });

@@ -3,6 +3,7 @@ const modal = document.querySelector('#modal');
 const notice = document.querySelector('#notice');
 let state = { page: 'projects', filter: 'active', query: '', projects: [], users: [], owners: [] };
 let timer;
+let boardTimer;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const flash = message => {
   notice.textContent = message;
@@ -270,6 +271,18 @@ async function boardDialog(project) {
     };
     dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"></div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    clearInterval(boardTimer);
+    boardTimer = setInterval(async () => {
+      if (!modal.open || !modal.classList.contains('board-modal')) return clearInterval(boardTimer);
+      if (document.querySelector('.task-card.dragging')) return;
+      try {
+        const current = await api(`/projects/${project.id}/board/version`);
+        if (current.sprintId !== board.sprint.id || current.version !== board.sprint.board_version) {
+          clearInterval(boardTimer);
+          await boardDialog(project);
+        }
+      } catch { clearInterval(boardTimer); }
+    }, 4000);
     if (canMove) {
       let dragged;
       document.querySelectorAll('[data-task]').forEach(item => {
