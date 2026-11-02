@@ -269,8 +269,9 @@ async function boardDialog(project) {
       const tasks = grouped.get(name);
       return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
     };
-    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"></div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
+    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools">${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    document.querySelector('#new-task')?.addEventListener('click', () => { clearInterval(boardTimer); taskForm(project, board); });
     clearInterval(boardTimer);
     boardTimer = setInterval(async () => {
       if (!modal.open || !modal.classList.contains('board-modal')) return clearInterval(boardTimer);
@@ -305,6 +306,15 @@ async function boardDialog(project) {
       });
     }
   } catch (error) { flash(error.message); }
+}
+function taskForm(project, board) {
+  const options = (items, label) => items.map(item => `<option value="${item.id}">${escape(label(item))}</option>`).join('');
+  dialog('Nueva tarea', `<form><p class="muted">La tarea se agregará a la columna Por hacer.</p>${field('Título', 'title', 'text', '', 'maxlength="120"')}<label>Historia del sprint<select name="storyId" required>${options(board.stories, story => `HU-${story.id} · ${story.title}`)}</select></label><label>Responsable<select name="assigneeId" required>${options(board.members, member => member.name)}</select></label><label>Descripción<textarea name="description" maxlength="1000" rows="3" placeholder="Opcional"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver</button><button type="submit" class="primary">Guardar tarea</button></div></form>`, async data => {
+    await api(`/projects/${project.id}/tasks`, 'POST', { ...data, storyId: Number(data.storyId), assigneeId: Number(data.assigneeId) });
+    await boardDialog(project);
+    flash('Tarea creada.');
+  });
+  document.querySelector('#back-board').onclick = () => boardDialog(project);
 }
 if (new URLSearchParams(location.search).has('invitation')) authView('activate');
 else load().catch(() => authView());
