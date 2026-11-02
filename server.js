@@ -381,6 +381,23 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.json(summary);
   });
+  app.get('/api/projects/:id/sprints/:sprintId/burndown', auth, (req, res) => {
+    const { sprint } = sprintFor(req);
+    const points = sprintPoints(sprint.id);
+    const committed = sprint.committed_points ?? points.points;
+    const completed = sprint.status === 'Cerrado' ? sprint.completed_points ?? 0 : points.completed;
+    const records = all('SELECT day,remaining FROM burndown WHERE sprint_id=? ORDER BY day', sprint.id);
+    const dates = [];
+    for (let day = new Date(sprint.start_date + 'T00:00:00Z'); day.toISOString().slice(0, 10) <= sprint.end_date; day.setUTCDate(day.getUTCDate() + 1)) dates.push(day.toISOString().slice(0, 10));
+    const last = sprint.status === 'Activo' ? today() : sprint.status === 'Cerrado' ? (records.at(-1)?.day ?? sprint.end_date) : null;
+    const days = dates.map((date, index) => {
+      const ideal = Math.round(committed * (1 - index / Math.max(dates.length - 1, 1)) * 10) / 10;
+      if (!last || date > last) return { date, ideal, remaining: null };
+      const recorded = records.filter(record => record.day <= date || date === dates.at(-1)).at(-1);
+      return { date, ideal, remaining: recorded ? recorded.remaining : committed };
+    });
+    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days });
+  });
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
     const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
