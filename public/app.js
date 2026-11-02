@@ -3,6 +3,7 @@ const modal = document.querySelector('#modal');
 const notice = document.querySelector('#notice');
 let state = { page: 'projects', filter: 'active', query: '', projects: [], users: [], owners: [] };
 let timer;
+let boardTimer;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const flash = message => {
   notice.textContent = message;
@@ -260,16 +261,60 @@ async function boardDialog(project) {
       return;
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
-    const card = task => `<article class="task-card" data-task="${task.id}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const canMove = state.user.role === 'Developer' && !project.archived;
+    const card = task => `<article class="task-card" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
     const grouped = new Map(board.columns.map(name => [name, []]));
     for (const task of board.tasks) grouped.get(task.status)?.push(task);
     const column = name => {
       const tasks = grouped.get(name);
       return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
     };
-    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"></div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
+    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools">${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    document.querySelector('#new-task')?.addEventListener('click', () => { clearInterval(boardTimer); taskForm(project, board); });
+    clearInterval(boardTimer);
+    boardTimer = setInterval(async () => {
+      if (!modal.open || !modal.classList.contains('board-modal')) return clearInterval(boardTimer);
+      if (document.querySelector('.task-card.dragging')) return;
+      try {
+        const current = await api(`/projects/${project.id}/board/version`);
+        if (current.sprintId !== board.sprint.id || current.version !== board.sprint.board_version) {
+          clearInterval(boardTimer);
+          await boardDialog(project);
+        }
+      } catch { clearInterval(boardTimer); }
+    }, 4000);
+    if (canMove) {
+      let dragged;
+      document.querySelectorAll('[data-task]').forEach(item => {
+        item.ondragstart = event => { dragged = item; event.dataTransfer.setData('text/plain', item.dataset.task); item.classList.add('dragging'); };
+        item.ondragend = () => { item.classList.remove('dragging'); dragged = null; };
+      });
+      document.querySelectorAll('[data-column]').forEach(area => {
+        area.ondragover = event => { if (dragged) { event.preventDefault(); area.classList.add('drop-target'); } };
+        area.ondragleave = () => area.classList.remove('drop-target');
+        area.ondrop = async event => {
+          event.preventDefault();
+          area.classList.remove('drop-target');
+          const task = board.tasks.find(item => item.id === Number(dragged?.dataset.task));
+          if (!task || task.status === area.dataset.column) return;
+          area.querySelector('.board-cards').append(dragged);
+          try { await api(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status: area.dataset.column }); }
+          catch (error) { flash(error.message); }
+          await boardDialog(project);
+        };
+      });
+    }
   } catch (error) { flash(error.message); }
+}
+function taskForm(project, board) {
+  const options = (items, label) => items.map(item => `<option value="${item.id}">${escape(label(item))}</option>`).join('');
+  dialog('Nueva tarea', `<form><p class="muted">La tarea se agregará a la columna Por hacer.</p>${field('Título', 'title', 'text', '', 'maxlength="120"')}<label>Historia del sprint<select name="storyId" required>${options(board.stories, story => `HU-${story.id} · ${story.title}`)}</select></label><label>Responsable<select name="assigneeId" required>${options(board.members, member => member.name)}</select></label><label>Descripción<textarea name="description" maxlength="1000" rows="3" placeholder="Opcional"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver</button><button type="submit" class="primary">Guardar tarea</button></div></form>`, async data => {
+    await api(`/projects/${project.id}/tasks`, 'POST', { ...data, storyId: Number(data.storyId), assigneeId: Number(data.assigneeId) });
+    await boardDialog(project);
+    flash('Tarea creada.');
+  });
+  document.querySelector('#back-board').onclick = () => boardDialog(project);
 }
 if (new URLSearchParams(location.search).has('invitation')) authView('activate');
 else load().catch(() => authView());

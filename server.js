@@ -62,7 +62,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
-  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER']]) {
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0']]) {
     if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
   }
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
@@ -369,12 +369,61 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   });
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
-    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [] });
     const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
     const tasks = all('SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE tasks.sprint_id=? ORDER BY tasks.position,tasks.id', sprint.id);
     const members = all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", req.user.company_id);
     res.json({ sprint, columns, stories, tasks, members });
+  });
+  app.get('/api/projects/:id/board/version', auth, (req, res) => {
+    const project = projectFor(req);
+    const sprint = get("SELECT id,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    res.json({ sprintId: sprint?.id ?? null, version: sprint?.board_version ?? 0 });
+  });
+  const activeTaskFor = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede modificar tareas del tablero.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const task = get("SELECT tasks.* FROM tasks JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.id=? AND sprints.project_id=? AND sprints.status='Activo'", Number(req.params.taskId) || 0, project.id);
+    if (!task) fail('Tarea no encontrada en el sprint activo.', 404);
+    return task;
+  };
+  const refreshStory = (sprintId, storyId) => {
+    const progress = get("SELECT COUNT(*) AS total, SUM(status='Terminado') AS done FROM tasks WHERE sprint_id=? AND story_id=?", sprintId, storyId);
+    run('UPDATE sprint_stories SET completed=? WHERE sprint_id=? AND story_id=?', progress.total > 0 && progress.done === progress.total ? 1 : 0, sprintId, storyId);
+  };
+  app.post('/api/projects/:id/tasks', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede crear tareas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const sprint = get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    if (!sprint) fail('El proyecto no tiene un sprint activo.');
+    const title = text(req.body.title, 'Título');
+    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    const story = get('SELECT story_id FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0);
+    if (!story) fail('Selecciona una historia del sprint activo.');
+    const assignee = get("SELECT id FROM users WHERE id=? AND company_id=? AND status='Activo' AND role='Developer'", Number.isSafeInteger(req.body.assigneeId) ? req.body.assigneeId : 0, req.user.company_id);
+    if (!assignee) fail('Selecciona un Developer activo de la empresa como responsable.');
+    const id = transaction(() => {
+      const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
+      const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position) VALUES (?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position).lastInsertRowid);
+      refreshStory(sprint.id, story.story_id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', sprint.id);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.patch('/api/projects/:id/tasks/:taskId/status', auth, (req, res) => {
+    const task = activeTaskFor(req);
+    if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
+    transaction(() => {
+      const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
+      run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
+      refreshStory(task.sprint_id, task.story_id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
+    });
+    res.json({ ok: true });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
@@ -386,4 +435,3 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const { app } = createApp();
   app.listen(Number(process.env.PORT || 3000), '127.0.0.1', () => console.log(`MySCruEm: http://localhost:${process.env.PORT || 3000}`));
 }
-
