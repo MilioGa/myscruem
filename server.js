@@ -393,6 +393,27 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const progress = get("SELECT COUNT(*) AS total, SUM(status='Terminado') AS done FROM tasks WHERE sprint_id=? AND story_id=?", sprintId, storyId);
     run('UPDATE sprint_stories SET completed=? WHERE sprint_id=? AND story_id=?', progress.total > 0 && progress.done === progress.total ? 1 : 0, sprintId, storyId);
   };
+  app.post('/api/projects/:id/tasks', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede crear tareas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const sprint = get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    if (!sprint) fail('El proyecto no tiene un sprint activo.');
+    const title = text(req.body.title, 'Título');
+    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    const story = get('SELECT story_id FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0);
+    if (!story) fail('Selecciona una historia del sprint activo.');
+    const assignee = get("SELECT id FROM users WHERE id=? AND company_id=? AND status='Activo' AND role='Developer'", Number.isSafeInteger(req.body.assigneeId) ? req.body.assigneeId : 0, req.user.company_id);
+    if (!assignee) fail('Selecciona un Developer activo de la empresa como responsable.');
+    const id = transaction(() => {
+      const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
+      const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position) VALUES (?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position).lastInsertRowid);
+      refreshStory(sprint.id, story.story_id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', sprint.id);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
   app.patch('/api/projects/:id/tasks/:taskId/status', auth, (req, res) => {
     const task = activeTaskFor(req);
     if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
