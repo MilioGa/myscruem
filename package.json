@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --env-file-if-exists=.env --watch server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "demo": "node --env-file-if-exists=.env scripts/demo-data.js"
   },
   "engines": {
     "node": ">=24"
