@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createApp } from '../server.js';
 
-export async function setup() {
-  const { app, db } = createApp({ dbPath: ':memory:' });
+export async function setup(options = {}) {
+  const { app, db } = createApp({ dbPath: ':memory:', ...options });
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}/api`;
