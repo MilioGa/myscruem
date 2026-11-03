@@ -71,6 +71,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL REFERENCES stories(id), title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', assignee_id INTEGER NOT NULL REFERENCES users(id), status TEXT NOT NULL DEFAULT 'Por hacer' CHECK(status IN ('Por hacer','En curso','En revisión','Terminado')), position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
+  db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
   const app = express();
@@ -345,6 +346,15 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (current.project.archived) fail('El proyecto está archivado.');
     return current;
   };
+  const today = () => {
+    const date = now();
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+  const recordBurndown = sprintId => {
+    const sprint = get('SELECT committed_points FROM sprints WHERE id=?', sprintId);
+    const completed = sprintPoints(sprintId).completed;
+    run('INSERT INTO burndown(sprint_id,day,remaining) VALUES (?,?,?) ON CONFLICT(sprint_id,day) DO UPDATE SET remaining=excluded.remaining', sprintId, today(), Math.max((sprint.committed_points || 0) - completed, 0));
+  };
   const sprintPoints = sprintId => get('SELECT COUNT(*) AS total, COALESCE(SUM(stories.points),0) AS points, COALESCE(SUM(CASE WHEN sprint_stories.completed=1 THEN stories.points ELSE 0 END),0) AS completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprintId);
   app.post('/api/projects/:id/sprints/:sprintId/start', auth, (req, res) => {
     const { project, sprint } = masterFor(req);
@@ -352,7 +362,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const committed = sprintPoints(sprint.id);
     if (!committed.total) fail('Selecciona al menos una historia antes de iniciar el sprint.');
     if (get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id)) fail('El proyecto ya tiene un sprint activo.', 409);
-    run("UPDATE sprints SET status='Activo',started_at=?,committed_points=? WHERE id=?", now().toISOString(), committed.points, sprint.id);
+    transaction(() => {
+      run("UPDATE sprints SET status='Activo',started_at=?,committed_points=? WHERE id=?", now().toISOString(), committed.points, sprint.id);
+      recordBurndown(sprint.id);
+    });
     res.json({ ok: true });
   });
   app.post('/api/projects/:id/sprints/:sprintId/close', auth, (req, res) => {
@@ -361,11 +374,29 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const summary = transaction(() => {
       const points = sprintPoints(sprint.id);
       const committed = sprint.committed_points ?? points.points;
+      recordBurndown(sprint.id);
       const returned = run('DELETE FROM sprint_stories WHERE sprint_id=? AND completed=0', sprint.id).changes;
       run("UPDATE sprints SET status='Cerrado',closed_at=?,committed_points=?,completed_points=? WHERE id=?", now().toISOString(), committed, points.completed, sprint.id);
       return { committed, completed: points.completed, returned: Number(returned) };
     });
     res.json(summary);
+  });
+  app.get('/api/projects/:id/sprints/:sprintId/burndown', auth, (req, res) => {
+    const { sprint } = sprintFor(req);
+    const points = sprintPoints(sprint.id);
+    const committed = sprint.committed_points ?? points.points;
+    const completed = sprint.status === 'Cerrado' ? sprint.completed_points ?? 0 : points.completed;
+    const records = all('SELECT day,remaining FROM burndown WHERE sprint_id=? ORDER BY day', sprint.id);
+    const dates = [];
+    for (let day = new Date(sprint.start_date + 'T00:00:00Z'); day.toISOString().slice(0, 10) <= sprint.end_date; day.setUTCDate(day.getUTCDate() + 1)) dates.push(day.toISOString().slice(0, 10));
+    const last = sprint.status === 'Activo' ? today() : sprint.status === 'Cerrado' ? (records.at(-1)?.day ?? sprint.end_date) : null;
+    const days = dates.map((date, index) => {
+      const ideal = Math.round(committed * (1 - index / Math.max(dates.length - 1, 1)) * 10) / 10;
+      if (!last || date > last) return { date, ideal, remaining: null };
+      const recorded = records.filter(record => record.day <= date || date === dates.at(-1)).at(-1);
+      return { date, ideal, remaining: recorded ? recorded.remaining : committed };
+    });
+    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days });
   });
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
@@ -409,6 +440,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
       const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position) VALUES (?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position).lastInsertRowid);
       refreshStory(sprint.id, story.story_id);
+      recordBurndown(sprint.id);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', sprint.id);
       return created;
     });
@@ -421,6 +453,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
       run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
       refreshStory(task.sprint_id, task.story_id);
+      recordBurndown(task.sprint_id);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
     });
     res.json({ ok: true });
