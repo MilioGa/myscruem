@@ -332,7 +332,20 @@ async function burndownDialog(project, sprintId, from = 'sprints') {
     const data = await api(`/projects/${project.id}/sprints/${sprintId}/burndown`);
     dialog('Métricas del sprint', `<p class="muted">${escape(project.name)} · ${escape(data.sprint.name)} · ${escape(data.sprint.status)}</p><div class="metric-cards"><div><small>Puntos comprometidos</small><strong>${data.committed}</strong></div><div><small>Puntos completados</small><strong>${data.completed}</strong></div><div><small>Puntos restantes</small><strong>${data.remaining}</strong></div></div><section class="burndown"><div class="burndown-heading"><h3>Gráfico Burndown</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Puntos restantes</div></div>${!data.committed ? '<section class="empty"><h2>Sin datos para graficar</h2><p>Selecciona historias estimadas para el sprint.</p></section>' : burndownChart(data)}${data.sprint.status === 'En planificación' && data.committed ? '<p class="muted">El sprint aún no inicia. La línea de puntos restantes aparecerá al iniciarlo.</p>' : ''}</section><div class="story-actions"><button id="back-metrics" class="quiet">${from === 'board' ? 'Volver al tablero' : 'Volver a sprints'}</button></div>`);
     modal.classList.add('board-modal');
-    document.querySelector('#back-metrics').onclick = () => from === 'board' ? boardDialog(project) : sprintsDialog(project);
+    document.querySelector('#back-metrics').onclick = () => { clearInterval(boardTimer); return from === 'board' ? boardDialog(project) : sprintsDialog(project); };
+    clearInterval(boardTimer);
+    if (data.sprint.status !== 'Activo') return;
+    const initial = await api(`/projects/${project.id}/board/version`);
+    boardTimer = setInterval(async () => {
+      if (!modal.open || !document.querySelector('.burndown-chart')) return clearInterval(boardTimer);
+      try {
+        const current = await api(`/projects/${project.id}/board/version`);
+        if (current.sprintId !== initial.sprintId || current.version !== initial.version) {
+          clearInterval(boardTimer);
+          await burndownDialog(project, sprintId, from);
+        }
+      } catch { clearInterval(boardTimer); }
+    }, 4000);
   } catch (error) { flash(error.message); }
 }
 if (new URLSearchParams(location.search).has('invitation')) authView('activate');
