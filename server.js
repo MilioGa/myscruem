@@ -71,6 +71,11 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL REFERENCES stories(id), title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', assignee_id INTEGER NOT NULL REFERENCES users(id), status TEXT NOT NULL DEFAULT 'Por hacer' CHECK(status IN ('Por hacer','En curso','En revisión','Terminado')), position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id), name TEXT NOT NULL, project_id INTEGER REFERENCES projects(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(company_id,name));
+    CREATE UNIQUE INDEX IF NOT EXISTS team_per_project ON teams(project_id) WHERE project_id IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS team_members (team_id INTEGER NOT NULL REFERENCES teams(id), user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(team_id,user_id));
+  `);
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
@@ -455,6 +460,51 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       refreshStory(task.sprint_id, task.story_id);
       recordBurndown(task.sprint_id);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
+    });
+    res.json({ ok: true });
+  });
+  const teamData = (req, existing) => {
+    const name = text(req.body.name, 'Nombre del equipo');
+    if (get('SELECT id FROM teams WHERE company_id=? AND name=? AND id<>?', req.user.company_id, name, existing?.id ?? 0)) fail('Ya existe un equipo con ese nombre.', 409);
+    let projectId = null;
+    if (req.body.projectId !== undefined && req.body.projectId !== null && req.body.projectId !== '') {
+      const project = get('SELECT id FROM projects WHERE id=? AND company_id=?', Number.isSafeInteger(req.body.projectId) ? req.body.projectId : 0, req.user.company_id);
+      if (!project) fail('Selecciona un proyecto de la empresa.');
+      if (get('SELECT id FROM teams WHERE project_id=? AND id<>?', project.id, existing?.id ?? 0)) fail('El proyecto ya tiene un equipo asignado.', 409);
+      projectId = project.id;
+    }
+    if (!Array.isArray(req.body.memberIds) || req.body.memberIds.length > 100) fail('Selecciona los integrantes del equipo.');
+    const memberIds = [...new Set(req.body.memberIds)];
+    for (const id of memberIds) {
+      if (!Number.isSafeInteger(id) || !get("SELECT id FROM users WHERE id=? AND company_id=? AND role<>'Administrador' AND status<>'Inactivo'", id, req.user.company_id)) fail('Los integrantes deben ser usuarios activos o pendientes de la empresa.');
+    }
+    return { name, projectId, memberIds };
+  };
+  const saveMembers = (teamId, memberIds) => {
+    run('DELETE FROM team_members WHERE team_id=?', teamId);
+    for (const id of memberIds) run('INSERT INTO team_members(team_id,user_id) VALUES (?,?)', teamId, id);
+  };
+  app.get('/api/teams', auth, admin, (req, res) => {
+    const teams = all('SELECT teams.id,teams.name,teams.project_id,projects.name AS project FROM teams LEFT JOIN projects ON projects.id=teams.project_id WHERE teams.company_id=? ORDER BY teams.name', req.user.company_id);
+    const members = all('SELECT team_members.team_id,users.id,users.name,users.role FROM team_members JOIN users ON users.id=team_members.user_id JOIN teams ON teams.id=team_members.team_id WHERE teams.company_id=? ORDER BY users.name', req.user.company_id);
+    res.json(teams.map(team => ({ ...team, members: members.filter(member => member.team_id === team.id).map(({ team_id, ...member }) => member) })));
+  });
+  app.post('/api/teams', auth, admin, (req, res) => {
+    const data = teamData(req);
+    const id = transaction(() => {
+      const created = Number(run('INSERT INTO teams(company_id,name,project_id) VALUES (?,?,?)', req.user.company_id, data.name, data.projectId).lastInsertRowid);
+      saveMembers(created, data.memberIds);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.patch('/api/teams/:id', auth, admin, (req, res) => {
+    const team = get('SELECT * FROM teams WHERE id=? AND company_id=?', Number(req.params.id) || 0, req.user.company_id);
+    if (!team) fail('Equipo no encontrado.', 404);
+    const data = teamData(req, team);
+    transaction(() => {
+      run('UPDATE teams SET name=?,project_id=? WHERE id=?', data.name, data.projectId, team.id);
+      saveMembers(team.id, data.memberIds);
     });
     res.json({ ok: true });
   });

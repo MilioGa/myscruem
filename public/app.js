@@ -26,7 +26,7 @@ const badge = (text, kind = '') => `<span class="badge ${kind}">${escape(text)}<
 function authView(mode = 'login') {
   const token = new URLSearchParams(location.search).get('invitation');
   if (token) mode = 'activate';
-  app.innerHTML = `<main class="auth"><aside class="intro"><img src="/logo.svg" alt="logo"><div><span class="eyebrow">UN ESPACIO PARA TU EQUIPO</span><h1>MySCruEm<span>.</span></h1><p>Grandes proyectos.<br>Un comienzo organizado.</p></div><small>Tu empresa, tu equipo, tus proyectos.</small></aside><section class="auth-panel"><div class="auth-form"><span class="eyebrow">BIENVENIDO A MY SCRUEM</span><h2>${mode === 'register' ? 'Registra tu empresa' : mode === 'activate' ? 'Activa tu cuenta' : 'Inicio de sesión'}</h2><p class="muted">${mode === 'register' ? 'Crea tu espacio de trabajo y tu cuenta de administrador.' : mode === 'activate' ? 'Elige una contraseña para empezar a trabajar con tu equipo.' : 'Accede al espacio de trabajo de tu empresa.'}</p><form id="auth-form">
+  app.innerHTML = `<main class="auth"><aside class="intro"><img src="/logo.png" alt="Logo de MySCruEm"><div><span class="eyebrow">UN ESPACIO PARA TU EQUIPO</span><h1>MySCruEm<span>.</span></h1><p>Grandes proyectos.<br>Un comienzo organizado.</p></div><small>Tu empresa, tu equipo, tus proyectos.</small></aside><section class="auth-panel"><div class="auth-form"><span class="eyebrow">BIENVENIDO A MY SCRUEM</span><h2>${mode === 'register' ? 'Registra tu empresa' : mode === 'activate' ? 'Activa tu cuenta' : 'Inicio de sesión'}</h2><p class="muted">${mode === 'register' ? 'Crea tu espacio de trabajo y tu cuenta de administrador.' : mode === 'activate' ? 'Elige una contraseña para empezar a trabajar con tu equipo.' : 'Accede al espacio de trabajo de tu empresa.'}</p><form id="auth-form">
   ${mode === 'register' ? field('Nombre de la empresa', 'company', 'text', '', 'maxlength="120"') + field('Tu nombre', 'name', 'text', '', 'autocomplete="name" maxlength="120"') : ''}
   ${mode !== 'activate' ? field('Código de empresa', 'code', 'text', '', 'placeholder="mi-empresa" pattern="[a-z0-9-]{3,40}" maxlength="40" autocomplete="organization"') + field('Correo electrónico', 'email', 'email', '', 'autocomplete="username" maxlength="254"') : ''}
   ${field('Contraseña', 'password', 'password', '', `autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="${mode === 'login' ? 1 : 10}" maxlength="128"`)}
@@ -55,13 +55,37 @@ async function load() {
   state.projects = await api('/projects');
   state.owners = await api('/owners');
   state.users = state.user.role === 'Administrador' ? await api('/users') : [];
+  state.teams = state.user.role === 'Administrador' ? await api('/teams') : [];
   if (state.page === 'users' && state.user.role !== 'Administrador') state.page = 'projects';
   render();
 }
+const navItems = [['backlog', '☰', 'Product Backlog'], ['sprints', '◷', 'Sprints'], ['board', '▥', 'Tablero Kanban'], ['metrics', '↘', 'Métricas']];
+const activeProjects = () => state.projects.filter(project => !project.archived);
+const currentProject = () => {
+  const active = activeProjects();
+  return active.find(project => project.id === state.currentProject) || active[0] || null;
+};
+async function openNav(key) {
+  const project = currentProject();
+  if (!project) return flash('Primero crea o selecciona un proyecto.');
+  if (key === 'backlog') return storiesDialog(project);
+  if (key === 'sprints') return sprintsDialog(project);
+  if (key === 'board') return boardDialog(project);
+  try {
+    const sprints = await api(`/projects/${project.id}/sprints`);
+    const sprint = sprints.find(item => item.status === 'Activo') || sprints.find(item => item.status === 'Cerrado') || sprints[0];
+    if (!sprint) return flash('El proyecto todavía no tiene sprints.');
+    await burndownDialog(project, sprint.id, 'sprints');
+  } catch (error) { flash(error.message); }
+}
 function render() {
   const isAdmin = state.user.role === 'Administrador';
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.svg" alt="logo"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${isAdmin ? `<button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
+  const active = activeProjects();
+  const current = currentProject();
+  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
   document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => { state.page = button.dataset.page; state.query = ''; render(); });
+  document.querySelectorAll('[data-nav]').forEach(button => button.onclick = () => openNav(button.dataset.nav));
+  document.querySelector('#current-project')?.addEventListener('change', event => { state.currentProject = Number(event.target.value); });
   document.querySelector('#logout').onclick = async () => {
     try { await api('/logout', 'POST'); state = { page: 'projects', filter: 'active', query: '' }; authView(); }
     catch (error) { flash(error.message); }
@@ -70,6 +94,11 @@ function render() {
   document.querySelector('#new-project')?.addEventListener('click', () => projectDialog());
   renderContent();
 }
+function rememberProject(id) {
+  state.currentProject = Number(id);
+  const select = document.querySelector('#current-project');
+  if (select && [...select.options].some(option => option.value === String(id))) select.value = String(id);
+}
 function renderContent() {
   const users = state.page === 'users';
   const source = users ? state.users : state.projects;
@@ -77,6 +106,11 @@ function renderContent() {
   const target = document.querySelector('#page-content');
   target.innerHTML = `<div class="toolbar">${users ? `<span>${state.users.length} usuarios en la empresa</span>` : `<div class="tabs"><button data-filter="active" class="${state.filter === 'active' ? 'active' : ''}">Activos <span>${state.projects.filter(p => !p.archived).length}</span></button><button data-filter="archived" class="${state.filter === 'archived' ? 'active' : ''}">Archivados <span>${state.projects.filter(p => p.archived).length}</span></button></div>`}<input id="search" aria-label="${users ? 'Buscar usuarios' : 'Buscar proyectos'}" placeholder="${users ? 'Buscar por nombre o correo…' : 'Buscar proyectos…'}" value="${escape(state.query)}"></div>
   ${!items.length ? `<section class="empty"><div class="empty-icon">${users ? '♧' : '▦'}</div><h2>${state.query ? 'No encontramos coincidencias' : users ? 'No hay usuarios' : state.filter === 'archived' ? 'No hay proyectos archivados' : 'Aquí comienza tu próximo proyecto'}</h2><p>${state.query ? 'Prueba con otro nombre.' : users ? 'Invita a una persona para empezar.' : state.filter === 'archived' ? 'Los proyectos que archives seguirán disponibles aquí.' : state.user.role === 'Product Owner' ? 'Crea tu primer proyecto y dale un espacio a tus ideas.' : state.user.role === 'Administrador' ? 'Invita a un Product Owner para que cree el primer proyecto.' : 'Los proyectos de tu empresa aparecerán aquí.'}</p></section>` : users ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${items.map(user => `<tr><td><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></td><td>${escape(user.role)}</td><td>${badge(user.status, user.status === 'Activo' ? 'green' : '')}</td><td><button class="quiet" data-user="${user.id}">Editar</button>${user.status === 'Pendiente' ? `<button class="quiet" data-invite="${user.id}">Invitación</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="project-grid">${items.map(p => `<article class="project-card"><div class="card-top"><div class="project-icon">▦</div>${badge(p.archived ? 'Archivado' : 'Activo', p.archived ? '' : 'green')}</div><h2>${escape(p.name)}</h2><p>${escape(p.description)}</p><div class="project-owner"><div class="avatar">${escape(p.owner.slice(0, 1))}</div><div><small>PRODUCT OWNER</small><strong>${escape(p.owner)}</strong></div></div><div class="card-footer"><small>${new Date(p.created_at + 'Z').toLocaleDateString('es-MX')}</small><div><button class="quiet" data-board="${p.id}">Tablero</button><button class="quiet" data-sprints="${p.id}">Sprints</button><button class="quiet" data-backlog="${p.id}">Historias</button><button class="quiet" data-project="${p.id}">Ver proyecto →</button></div></div></article>`).join('')}</div>`}`;
+  if (users) {
+    target.insertAdjacentHTML('beforeend', `<section class="teams"><div class="teams-heading"><div><h2>Equipos</h2><p class="muted">Organiza a las personas por proyecto. Los Developers del equipo serán los responsables disponibles en su tablero.</p></div><button id="new-team" class="primary">+ Nuevo equipo</button></div>${state.teams.length ? `<div class="team-grid">${state.teams.map(team => `<article class="team-card"><div class="card-top"><h3>${escape(team.name)}</h3><button class="quiet" data-team="${team.id}">Editar</button></div><p class="muted">${team.project ? `Proyecto: ${escape(team.project)}` : 'Sin proyecto asignado'}</p><div class="team-members">${team.members.map(member => `<span class="chip">${escape(member.name)} · ${escape(member.role)}</span>`).join('') || '<span class="muted">Sin integrantes</span>'}</div></article>`).join('')}</div>` : '<p class="muted">Todavía no hay equipos.</p>'}</section>`);
+    document.querySelector('#new-team').onclick = () => teamDialog();
+    document.querySelectorAll('[data-team]').forEach(button => button.onclick = () => teamDialog(state.teams.find(team => team.id === Number(button.dataset.team))));
+  }
   document.querySelector('#search').oninput = event => {
     const position = event.target.selectionStart;
     state.query = event.target.value;
@@ -89,9 +123,9 @@ function renderContent() {
   document.querySelectorAll('[data-user]').forEach(button => button.onclick = () => userDialog(state.users.find(u => u.id === Number(button.dataset.user))));
   document.querySelectorAll('[data-invite]').forEach(button => button.onclick = () => invitation(Number(button.dataset.invite)));
   document.querySelectorAll('[data-project]').forEach(button => button.onclick = () => projectDialog(state.projects.find(p => p.id === Number(button.dataset.project))));
-  document.querySelectorAll('[data-backlog]').forEach(button => button.onclick = () => storiesDialog(state.projects.find(p => p.id === Number(button.dataset.backlog))));
-  document.querySelectorAll('[data-sprints]').forEach(button => button.onclick = () => sprintsDialog(state.projects.find(p => p.id === Number(button.dataset.sprints))));
-  document.querySelectorAll('[data-board]').forEach(button => button.onclick = () => boardDialog(state.projects.find(p => p.id === Number(button.dataset.board))));
+  document.querySelectorAll('[data-backlog]').forEach(button => button.onclick = () => { rememberProject(button.dataset.backlog); storiesDialog(state.projects.find(p => p.id === Number(button.dataset.backlog))); });
+  document.querySelectorAll('[data-sprints]').forEach(button => button.onclick = () => { rememberProject(button.dataset.sprints); sprintsDialog(state.projects.find(p => p.id === Number(button.dataset.sprints))); });
+  document.querySelectorAll('[data-board]').forEach(button => button.onclick = () => { rememberProject(button.dataset.board); boardDialog(state.projects.find(p => p.id === Number(button.dataset.board))); });
 }
 function dialog(title, content, onSubmit) {
   modal.className = '';
@@ -109,6 +143,19 @@ async function invitation(id) {
       catch { document.querySelector('#invite-url').select(); flash('Selecciona y copia el enlace.'); }
     };
   } catch (error) { flash(error.message); }
+}
+function teamDialog(team) {
+  const selected = new Set(team?.members.map(member => member.id) || []);
+  const people = state.users.filter(user => user.role !== 'Administrador' && user.status !== 'Inactivo');
+  dialog(team ? 'Editar equipo' : 'Nuevo equipo', `<form>${field('Nombre del equipo', 'name', 'text', team?.name || '', 'maxlength="120"')}<label>Proyecto<select name="projectId"><option value="">Sin proyecto</option>${state.projects.filter(project => !project.archived || project.id === team?.project_id).map(project => `<option value="${project.id}" ${project.id === team?.project_id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></label><fieldset class="member-picker"><legend>Integrantes</legend>${people.map(user => `<label class="check"><input type="checkbox" name="member" value="${user.id}" ${selected.has(user.id) ? 'checked' : ''}> ${escape(user.name)} <small>${escape(user.role)}</small></label>`).join('') || '<p class="muted">Invita usuarios para formar equipos.</p>'}</fieldset><p class="form-error" role="alert"></p><button type="submit" class="primary">Guardar equipo</button></form>`, async data => {
+    const memberIds = [...modal.querySelectorAll('[name=member]:checked')].map(input => Number(input.value));
+    const body = { name: data.name, projectId: data.projectId ? Number(data.projectId) : null, memberIds };
+    await api(team ? `/teams/${team.id}` : '/teams', team ? 'PATCH' : 'POST', body);
+    modal.close();
+    state.teams = await api('/teams');
+    renderContent();
+    flash(team ? 'Equipo actualizado.' : 'Equipo creado.');
+  });
 }
 function userDialog(user) {
   dialog(user ? 'Editar usuario' : 'Invitar usuario', `<form>${field('Nombre', 'name', 'text', user?.name, 'maxlength="120"')}${field('Correo electrónico', 'email', 'email', user?.email, 'maxlength="254"')}<label>Rol<select name="role">${roleOptions(user?.role || 'Developer')}</select></label>${user ? `<label>Estado<select name="status">${(user.status === 'Pendiente' || !user.password && user.status === 'Inactivo' ? ['Pendiente', 'Activo', 'Inactivo'] : ['Activo', 'Inactivo']).map(s => `<option ${s === user.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>` : '<p class="muted">La persona definirá su contraseña al aceptar la invitación.</p>'}<p class="form-error" role="alert"></p><button type="submit" class="primary">${user ? 'Guardar cambios' : 'Crear invitación'}</button></form>`, async data => {
