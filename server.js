@@ -62,7 +62,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
-  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER']]) {
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0']]) {
     if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
   }
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
@@ -71,6 +71,15 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL REFERENCES stories(id), title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', assignee_id INTEGER NOT NULL REFERENCES users(id), status TEXT NOT NULL DEFAULT 'Por hacer' CHECK(status IN ('Por hacer','En curso','En revisión','Terminado')), position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id), name TEXT NOT NULL, project_id INTEGER REFERENCES projects(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(company_id,name));
+    CREATE UNIQUE INDEX IF NOT EXISTS team_per_project ON teams(project_id) WHERE project_id IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS team_members (team_id INTEGER NOT NULL REFERENCES teams(id), user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(team_id,user_id));
+  `);
+  db.exec('CREATE TABLE IF NOT EXISTS epics (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id,name))');
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'epic_id')) db.exec('ALTER TABLE stories ADD COLUMN epic_id INTEGER REFERENCES epics(id)');
+  db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
+  db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
   const app = express();
   app.disable('x-powered-by');
@@ -344,6 +353,15 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (current.project.archived) fail('El proyecto está archivado.');
     return current;
   };
+  const today = () => {
+    const date = now();
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+  const recordBurndown = sprintId => {
+    const sprint = get('SELECT committed_points FROM sprints WHERE id=?', sprintId);
+    const completed = sprintPoints(sprintId).completed;
+    run('INSERT INTO burndown(sprint_id,day,remaining) VALUES (?,?,?) ON CONFLICT(sprint_id,day) DO UPDATE SET remaining=excluded.remaining', sprintId, today(), Math.max((sprint.committed_points || 0) - completed, 0));
+  };
   const sprintPoints = sprintId => get('SELECT COUNT(*) AS total, COALESCE(SUM(stories.points),0) AS points, COALESCE(SUM(CASE WHEN sprint_stories.completed=1 THEN stories.points ELSE 0 END),0) AS completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprintId);
   app.post('/api/projects/:id/sprints/:sprintId/start', auth, (req, res) => {
     const { project, sprint } = masterFor(req);
@@ -351,7 +369,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const committed = sprintPoints(sprint.id);
     if (!committed.total) fail('Selecciona al menos una historia antes de iniciar el sprint.');
     if (get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id)) fail('El proyecto ya tiene un sprint activo.', 409);
-    run("UPDATE sprints SET status='Activo',started_at=?,committed_points=? WHERE id=?", now().toISOString(), committed.points, sprint.id);
+    transaction(() => {
+      run("UPDATE sprints SET status='Activo',started_at=?,committed_points=? WHERE id=?", now().toISOString(), committed.points, sprint.id);
+      recordBurndown(sprint.id);
+    });
     res.json({ ok: true });
   });
   app.post('/api/projects/:id/sprints/:sprintId/close', auth, (req, res) => {
@@ -360,20 +381,182 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const summary = transaction(() => {
       const points = sprintPoints(sprint.id);
       const committed = sprint.committed_points ?? points.points;
+      recordBurndown(sprint.id);
       const returned = run('DELETE FROM sprint_stories WHERE sprint_id=? AND completed=0', sprint.id).changes;
       run("UPDATE sprints SET status='Cerrado',closed_at=?,committed_points=?,completed_points=? WHERE id=?", now().toISOString(), committed, points.completed, sprint.id);
       return { committed, completed: points.completed, returned: Number(returned) };
     });
     res.json(summary);
   });
+  app.get('/api/projects/:id/sprints/:sprintId/burndown', auth, (req, res) => {
+    const { sprint } = sprintFor(req);
+    const points = sprintPoints(sprint.id);
+    const committed = sprint.committed_points ?? points.points;
+    const completed = sprint.status === 'Cerrado' ? sprint.completed_points ?? 0 : points.completed;
+    const records = all('SELECT day,remaining FROM burndown WHERE sprint_id=? ORDER BY day', sprint.id);
+    const dates = [];
+    for (let day = new Date(sprint.start_date + 'T00:00:00Z'); day.toISOString().slice(0, 10) <= sprint.end_date; day.setUTCDate(day.getUTCDate() + 1)) dates.push(day.toISOString().slice(0, 10));
+    const last = sprint.status === 'Activo' ? today() : sprint.status === 'Cerrado' ? (records.at(-1)?.day ?? sprint.end_date) : null;
+    const days = dates.map((date, index) => {
+      const ideal = Math.round(committed * (1 - index / Math.max(dates.length - 1, 1)) * 10) / 10;
+      if (!last || date > last) return { date, ideal, remaining: null };
+      const recorded = records.filter(record => record.day <= date || date === dates.at(-1)).at(-1);
+      return { date, ideal, remaining: recorded ? recorded.remaining : committed };
+    });
+    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days });
+  });
+  const assignable = project => {
+    const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
+    return team
+      ? all("SELECT users.id,users.name FROM team_members JOIN users ON users.id=team_members.user_id WHERE team_members.team_id=? AND users.status='Activo' AND users.role='Developer' ORDER BY users.name", team.id)
+      : all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", project.company_id);
+  };
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
-    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [] });
     const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
     const tasks = all('SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE tasks.sprint_id=? ORDER BY tasks.position,tasks.id', sprint.id);
-    const members = all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", req.user.company_id);
+    const members = assignable(project);
     res.json({ sprint, columns, stories, tasks, members });
+  });
+  app.get('/api/projects/:id/board/version', auth, (req, res) => {
+    const project = projectFor(req);
+    const sprint = get("SELECT id,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    res.json({ sprintId: sprint?.id ?? null, version: sprint?.board_version ?? 0 });
+  });
+  const activeTaskFor = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede modificar tareas del tablero.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const task = get("SELECT tasks.* FROM tasks JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.id=? AND sprints.project_id=? AND sprints.status='Activo'", Number(req.params.taskId) || 0, project.id);
+    if (!task) fail('Tarea no encontrada en el sprint activo.', 404);
+    return task;
+  };
+  const refreshStory = (sprintId, storyId) => {
+    const progress = get("SELECT COUNT(*) AS total, SUM(status='Terminado') AS done FROM tasks WHERE sprint_id=? AND story_id=?", sprintId, storyId);
+    run('UPDATE sprint_stories SET completed=? WHERE sprint_id=? AND story_id=?', progress.total > 0 && progress.done === progress.total ? 1 : 0, sprintId, storyId);
+  };
+  app.post('/api/projects/:id/tasks', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Developer') fail('Solo un Developer puede crear tareas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const sprint = get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id);
+    if (!sprint) fail('El proyecto no tiene un sprint activo.');
+    const title = text(req.body.title, 'Título');
+    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    const story = get('SELECT story_id FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0);
+    if (!story) fail('Selecciona una historia del sprint activo.');
+    const assignee = assignable(project).find(member => member.id === req.body.assigneeId);
+    if (!assignee) fail('Selecciona un Developer activo del equipo del proyecto como responsable.');
+    const id = transaction(() => {
+      const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
+      const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position) VALUES (?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position).lastInsertRowid);
+      refreshStory(sprint.id, story.story_id);
+      recordBurndown(sprint.id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', sprint.id);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.patch('/api/projects/:id/tasks/:taskId/status', auth, (req, res) => {
+    const task = activeTaskFor(req);
+    if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
+    transaction(() => {
+      const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
+      run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
+      refreshStory(task.sprint_id, task.story_id);
+      recordBurndown(task.sprint_id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
+    });
+    res.json({ ok: true });
+  });
+  const teamData = (req, existing) => {
+    const name = text(req.body.name, 'Nombre del equipo');
+    if (get('SELECT id FROM teams WHERE company_id=? AND name=? AND id<>?', req.user.company_id, name, existing?.id ?? 0)) fail('Ya existe un equipo con ese nombre.', 409);
+    let projectId = null;
+    if (req.body.projectId !== undefined && req.body.projectId !== null && req.body.projectId !== '') {
+      const project = get('SELECT id FROM projects WHERE id=? AND company_id=?', Number.isSafeInteger(req.body.projectId) ? req.body.projectId : 0, req.user.company_id);
+      if (!project) fail('Selecciona un proyecto de la empresa.');
+      if (get('SELECT id FROM teams WHERE project_id=? AND id<>?', project.id, existing?.id ?? 0)) fail('El proyecto ya tiene un equipo asignado.', 409);
+      projectId = project.id;
+    }
+    if (!Array.isArray(req.body.memberIds) || req.body.memberIds.length > 100) fail('Selecciona los integrantes del equipo.');
+    const memberIds = [...new Set(req.body.memberIds)];
+    for (const id of memberIds) {
+      if (!Number.isSafeInteger(id) || !get("SELECT id FROM users WHERE id=? AND company_id=? AND role<>'Administrador' AND status<>'Inactivo'", id, req.user.company_id)) fail('Los integrantes deben ser usuarios activos o pendientes de la empresa.');
+    }
+    return { name, projectId, memberIds };
+  };
+  const saveMembers = (teamId, memberIds) => {
+    run('DELETE FROM team_members WHERE team_id=?', teamId);
+    for (const id of memberIds) run('INSERT INTO team_members(team_id,user_id) VALUES (?,?)', teamId, id);
+  };
+  app.get('/api/teams', auth, admin, (req, res) => {
+    const teams = all('SELECT teams.id,teams.name,teams.project_id,projects.name AS project FROM teams LEFT JOIN projects ON projects.id=teams.project_id WHERE teams.company_id=? ORDER BY teams.name', req.user.company_id);
+    const members = all('SELECT team_members.team_id,users.id,users.name,users.role FROM team_members JOIN users ON users.id=team_members.user_id JOIN teams ON teams.id=team_members.team_id WHERE teams.company_id=? ORDER BY users.name', req.user.company_id);
+    res.json(teams.map(team => ({ ...team, members: members.filter(member => member.team_id === team.id).map(({ team_id, ...member }) => member) })));
+  });
+  app.post('/api/teams', auth, admin, (req, res) => {
+    const data = teamData(req);
+    const id = transaction(() => {
+      const created = Number(run('INSERT INTO teams(company_id,name,project_id) VALUES (?,?,?)', req.user.company_id, data.name, data.projectId).lastInsertRowid);
+      saveMembers(created, data.memberIds);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.patch('/api/teams/:id', auth, admin, (req, res) => {
+    const team = get('SELECT * FROM teams WHERE id=? AND company_id=?', Number(req.params.id) || 0, req.user.company_id);
+    if (!team) fail('Equipo no encontrado.', 404);
+    const data = teamData(req, team);
+    transaction(() => {
+      run('UPDATE teams SET name=?,project_id=? WHERE id=?', data.name, data.projectId, team.id);
+      saveMembers(team.id, data.memberIds);
+    });
+    res.json({ ok: true });
+  });
+  const epicOwner = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede gestionar épicas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    return project;
+  };
+  const epicData = (req, project, existing) => {
+    const name = text(req.body.name, 'Nombre de la épica');
+    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    if (get('SELECT id FROM epics WHERE project_id=? AND name=? AND id<>?', project.id, name, existing?.id ?? 0)) fail('Ya existe una épica con ese nombre.', 409);
+    return { name, description };
+  };
+  app.get('/api/projects/:id/epics', auth, (req, res) => {
+    const project = projectFor(req);
+    res.json(all('SELECT epics.id,epics.name,epics.description,COUNT(stories.id) AS stories,COALESCE(SUM(stories.points),0) AS points FROM epics LEFT JOIN stories ON stories.epic_id=epics.id WHERE epics.project_id=? GROUP BY epics.id ORDER BY epics.id', project.id));
+  });
+  app.post('/api/projects/:id/epics', auth, (req, res) => {
+    const project = epicOwner(req);
+    const data = epicData(req, project);
+    res.status(201).json({ id: Number(run('INSERT INTO epics(project_id,name,description) VALUES (?,?,?)', project.id, data.name, data.description).lastInsertRowid) });
+  });
+  app.patch('/api/projects/:id/epics/:epicId', auth, (req, res) => {
+    const project = epicOwner(req);
+    const epic = get('SELECT * FROM epics WHERE id=? AND project_id=?', Number(req.params.epicId) || 0, project.id);
+    if (!epic) fail('Épica no encontrada.', 404);
+    const data = epicData(req, project, epic);
+    run('UPDATE epics SET name=?,description=? WHERE id=?', data.name, data.description, epic.id);
+    res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/epic', auth, (req, res) => {
+    const project = epicOwner(req);
+    const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    let epicId = null;
+    if (req.body.epicId !== null) {
+      const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
+      if (!epic) fail('Selecciona una épica del proyecto.');
+      epicId = epic.id;
+    }
+    run('UPDATE stories SET epic_id=? WHERE id=?', epicId, story.id);
+    res.json({ ok: true });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
