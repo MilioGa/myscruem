@@ -81,6 +81,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
+  const taskTypes = ['Desarrollo', 'Pruebas', 'Diseño', 'Documentación'];
+  const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map(column => column.name);
+  if (!taskColumns.includes('label')) db.exec("ALTER TABLE tasks ADD COLUMN label TEXT NOT NULL DEFAULT ''");
+  if (!taskColumns.includes('type')) db.exec("ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT 'Desarrollo'");
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -414,11 +418,17 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
     const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
-    if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [] });
+    if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [], types: taskTypes, labels: [] });
     const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
-    const tasks = all('SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE tasks.sprint_id=? ORDER BY tasks.position,tasks.id', sprint.id);
+    const filters = ['tasks.sprint_id=?'];
+    const values = [sprint.id];
+    if (req.query.assignee) { filters.push('tasks.assignee_id=?'); values.push(Number(req.query.assignee) || 0); }
+    if (req.query.label) { filters.push('tasks.label=?'); values.push(String(req.query.label)); }
+    if (req.query.type) { filters.push('tasks.type=?'); values.push(String(req.query.type)); }
+    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
+    const labels = all("SELECT DISTINCT label FROM tasks WHERE sprint_id=? AND label<>'' ORDER BY label", sprint.id).map(row => row.label);
     const members = assignable(project);
-    res.json({ sprint, columns, stories, tasks, members });
+    res.json({ sprint, columns, stories, tasks, members, types: taskTypes, labels });
   });
   app.get('/api/projects/:id/board/version', auth, (req, res) => {
     const project = projectFor(req);
@@ -445,13 +455,16 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!sprint) fail('El proyecto no tiene un sprint activo.');
     const title = text(req.body.title, 'Título');
     const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    const label = req.body.label === undefined || req.body.label === '' ? '' : text(req.body.label, 'Etiqueta', 40);
+    const type = req.body.type === undefined ? 'Desarrollo' : req.body.type;
+    if (!taskTypes.includes(type)) fail('Selecciona un tipo de tarea válido.');
     const story = get('SELECT story_id FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0);
     if (!story) fail('Selecciona una historia del sprint activo.');
     const assignee = assignable(project).find(member => member.id === req.body.assigneeId);
     if (!assignee) fail('Selecciona un Developer activo del equipo del proyecto como responsable.');
     const id = transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
-      const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position) VALUES (?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position).lastInsertRowid);
+      const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position,label,type) VALUES (?,?,?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position, label, type).lastInsertRowid);
       refreshStory(sprint.id, story.story_id);
       recordBurndown(sprint.id);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', sprint.id);
