@@ -558,6 +558,14 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('UPDATE stories SET epic_id=? WHERE id=?', epicId, story.id);
     res.json({ ok: true });
   });
+  app.get('/api/projects/:id/stories/:storyId/tasks', auth, (req, res) => {
+    const project = projectFor(req);
+    const story = get('SELECT id,title,points,epic_id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    const tasks = all('SELECT tasks.id,tasks.title,tasks.status,users.name AS assignee,sprints.name AS sprint FROM tasks JOIN users ON users.id=tasks.assignee_id JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.story_id=? ORDER BY sprints.id,tasks.position,tasks.id', story.id);
+    const done = tasks.filter(task => task.status === 'Terminado').length;
+    res.json({ story, tasks, done, total: tasks.length, progress: tasks.length ? Math.round(done * 100 / tasks.length) : 0 });
+  });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
   app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.status ? error.message : 'No fue posible completar la operación.' }));
