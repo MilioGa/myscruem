@@ -1,0 +1,53 @@
+{
+  "title": "Guía de Scrum para equipos MySCruEm",
+  "intro": "Esta guía resume el marco de trabajo Scrum y explica cómo se aplica en MySCruEm. Está pensada para colaboradores nuevos que necesitan entender rápidamente cómo trabaja el equipo.",
+  "modules": [
+    {
+      "id": "que-es-scrum",
+      "title": "1. Qué es Scrum",
+      "summary": "Un marco de trabajo ligero para entregar valor en ciclos cortos y aprender de cada entrega.",
+      "sections": [
+        { "title": "Idea central", "body": "Scrum ayuda a personas y equipos a resolver problemas complejos entregando incrementos de producto en ciclos de duración fija llamados sprints. En lugar de planear todo al inicio, el equipo construye una parte útil, la revisa con los interesados y ajusta el siguiente paso con lo aprendido." },
+        { "title": "Pilares", "body": "Scrum se apoya en el empirismo: las decisiones se toman con base en lo que se observa. Sus tres pilares son transparencia (el trabajo y su avance son visibles para todos), inspección (se revisa con frecuencia el producto y el proceso) y adaptación (se corrige el rumbo en cuanto se detecta una desviación)." },
+        { "title": "Valores", "body": "El equipo practica compromiso, foco, apertura, respeto y coraje. En la práctica significa cumplir la meta del sprint, concentrarse en lo más importante, hablar con claridad sobre problemas, valorar el trabajo de los demás y animarse a decir cuando algo no va bien." },
+        { "title": "Ciclo del sprint", "body": "Cada sprint dura lo mismo, normalmente de una a cuatro semanas; en MySCruEm usamos sprints de una semana. Empieza con la planificación, sigue con el trabajo diario y la Daily, y termina con la revisión y la retrospectiva. Al cerrar un sprint inicia el siguiente." }
+      ]
+    },
+    {
+      "id": "roles",
+      "title": "2. Roles y responsabilidades",
+      "summary": "Un equipo Scrum tiene un Product Owner, un Scrum Master y Developers; en MySCruEm cada rol tiene permisos propios.",
+      "sections": [
+        { "title": "Product Owner", "body": "Maximiza el valor del producto. Es responsable del Product Backlog: escribe las historias de usuario, define sus criterios de aceptación, las ordena y asigna su prioridad. En MySCruEm crea proyectos, historias y épicas, y es el único que puede reordenar el backlog o cambiar prioridades." },
+        { "title": "Scrum Master", "body": "Ayuda al equipo a entender y aplicar Scrum, facilita los eventos y elimina impedimentos. En MySCruEm crea, inicia y cierra sprints, consulta el gráfico Burndown y atiende la lista de impedimentos abiertos hasta cerrarlos con su solución." },
+        { "title": "Developers", "body": "Construyen el incremento de cada sprint y se comprometen con su calidad. En MySCruEm estiman las historias con puntos, seleccionan las historias del sprint, crean y asignan tareas, mueven las tarjetas del tablero y registran impedimentos." },
+        { "title": "Administrador de la empresa", "body": "No es un rol de Scrum, pero en MySCruEm gestiona las cuentas: invita usuarios, asigna roles y organiza a las personas en equipos por proyecto." }
+      ]
+    },
+    {
+      "id": "eventos-artefactos",
+      "title": "3. Eventos y artefactos",
+      "summary": "Los eventos crean momentos fijos para inspeccionar y adaptar; los artefactos hacen visible el trabajo.",
+      "sections": [
+        { "title": "Planificación del sprint", "body": "El equipo define la meta del sprint, elige las historias del Product Backlog que puede terminar y las divide en tareas. En MySCruEm se registra el sprint con sus fechas y su meta, y los Developers forman el Sprint Backlog seleccionando historias estimadas." },
+        { "title": "Daily", "body": "Reunión diaria de 15 minutos como máximo para revisar el avance hacia la meta y detectar bloqueos. Conviene hacerla frente al tablero Kanban y registrar en ese momento cualquier impedimento." },
+        { "title": "Revisión del sprint", "body": "Al final del sprint el equipo muestra el incremento a los interesados y recoge retroalimentación. Las historias terminadas se presentan funcionando; el resto regresa al Product Backlog." },
+        { "title": "Retrospectiva", "body": "El equipo analiza cómo trabajó: qué salió bien, qué se puede mejorar y qué acciones aplicará en el siguiente sprint." },
+        { "title": "Product Backlog", "body": "Lista ordenada de todo lo que podría necesitar el producto. Cada elemento es una historia de usuario con su prioridad MoSCoW, sus puntos y sus criterios de aceptación. Las historias grandes se agrupan en épicas." },
+        { "title": "Sprint Backlog", "body": "Las historias elegidas para el sprint más las tareas necesarias para terminarlas. Su compromiso es la meta del sprint." },
+        { "title": "Incremento", "body": "La suma de todo lo terminado que funciona y cumple la Definition of Done. Cada sprint debe producir al menos un incremento utilizable." }
+      ]
+    },
+    {
+      "id": "herramientas",
+      "title": "4. Herramientas de MySCruEm",
+      "summary": "Cómo usar el tablero Kanban, el gráfico Burndown, los impedimentos y la Definition of Ready dentro de la aplicación.",
+      "sections": [
+        { "title": "Tablero Kanban", "body": "Muestra las tareas del sprint activo en cuatro columnas: Por hacer, En curso, En revisión y Terminado. Arrastra una tarjeta para cambiar su estado; el resto del equipo verá el cambio sin recargar. Usa los filtros por miembro, etiqueta o tipo para enfocarte en tu trabajo." },
+        { "title": "Gráfico Burndown", "body": "Compara la línea ideal, que baja de los puntos comprometidos a cero, con los puntos que realmente quedan cada día. Si la línea real queda por encima de la ideal, el equipo va atrasado y conviene revisarlo en la Daily." },
+        { "title": "Impedimentos", "body": "Cuando algo te bloquea, regístralo en la tarjeta con una descripción clara. La tarjeta se resalta en rojo y el Scrum Master la ve en su lista de impedimentos abiertos; al resolverlo, la cierra indicando la solución." },
+        { "title": "Definition of Ready", "body": "Una historia está lista para un sprint cuando tiene redacción Como / quiero / para, criterios de aceptación verificables, estimación de 13 puntos o menos, prioridad validada por el Product Owner y ninguna dependencia bloqueante." }
+      ]
+    }
+  ]
+}

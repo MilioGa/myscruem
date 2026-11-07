@@ -76,6 +76,8 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS team_per_project ON teams(project_id) WHERE project_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS team_members (team_id INTEGER NOT NULL REFERENCES teams(id), user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(team_id,user_id));
   `);
+  db.exec('CREATE TABLE IF NOT EXISTS epics (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id,name))');
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'epic_id')) db.exec('ALTER TABLE stories ADD COLUMN epic_id INTEGER REFERENCES epics(id)');
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
@@ -403,13 +405,19 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days });
   });
+  const assignable = project => {
+    const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
+    return team
+      ? all("SELECT users.id,users.name FROM team_members JOIN users ON users.id=team_members.user_id WHERE team_members.team_id=? AND users.status='Activo' AND users.role='Developer' ORDER BY users.name", team.id)
+      : all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", project.company_id);
+  };
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
     const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [] });
     const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
     const tasks = all('SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE tasks.sprint_id=? ORDER BY tasks.position,tasks.id', sprint.id);
-    const members = all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", req.user.company_id);
+    const members = assignable(project);
     res.json({ sprint, columns, stories, tasks, members });
   });
   app.get('/api/projects/:id/board/version', auth, (req, res) => {
@@ -439,8 +447,8 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
     const story = get('SELECT story_id FROM sprint_stories WHERE sprint_id=? AND story_id=?', sprint.id, Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0);
     if (!story) fail('Selecciona una historia del sprint activo.');
-    const assignee = get("SELECT id FROM users WHERE id=? AND company_id=? AND status='Activo' AND role='Developer'", Number.isSafeInteger(req.body.assigneeId) ? req.body.assigneeId : 0, req.user.company_id);
-    if (!assignee) fail('Selecciona un Developer activo de la empresa como responsable.');
+    const assignee = assignable(project).find(member => member.id === req.body.assigneeId);
+    if (!assignee) fail('Selecciona un Developer activo del equipo del proyecto como responsable.');
     const id = transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
       const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position) VALUES (?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position).lastInsertRowid);
@@ -507,6 +515,56 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       saveMembers(team.id, data.memberIds);
     });
     res.json({ ok: true });
+  });
+  const epicOwner = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede gestionar épicas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    return project;
+  };
+  const epicData = (req, project, existing) => {
+    const name = text(req.body.name, 'Nombre de la épica');
+    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    if (get('SELECT id FROM epics WHERE project_id=? AND name=? AND id<>?', project.id, name, existing?.id ?? 0)) fail('Ya existe una épica con ese nombre.', 409);
+    return { name, description };
+  };
+  app.get('/api/projects/:id/epics', auth, (req, res) => {
+    const project = projectFor(req);
+    res.json(all('SELECT epics.id,epics.name,epics.description,COUNT(stories.id) AS stories,COALESCE(SUM(stories.points),0) AS points FROM epics LEFT JOIN stories ON stories.epic_id=epics.id WHERE epics.project_id=? GROUP BY epics.id ORDER BY epics.id', project.id));
+  });
+  app.post('/api/projects/:id/epics', auth, (req, res) => {
+    const project = epicOwner(req);
+    const data = epicData(req, project);
+    res.status(201).json({ id: Number(run('INSERT INTO epics(project_id,name,description) VALUES (?,?,?)', project.id, data.name, data.description).lastInsertRowid) });
+  });
+  app.patch('/api/projects/:id/epics/:epicId', auth, (req, res) => {
+    const project = epicOwner(req);
+    const epic = get('SELECT * FROM epics WHERE id=? AND project_id=?', Number(req.params.epicId) || 0, project.id);
+    if (!epic) fail('Épica no encontrada.', 404);
+    const data = epicData(req, project, epic);
+    run('UPDATE epics SET name=?,description=? WHERE id=?', data.name, data.description, epic.id);
+    res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/epic', auth, (req, res) => {
+    const project = epicOwner(req);
+    const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    let epicId = null;
+    if (req.body.epicId !== null) {
+      const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
+      if (!epic) fail('Selecciona una épica del proyecto.');
+      epicId = epic.id;
+    }
+    run('UPDATE stories SET epic_id=? WHERE id=?', epicId, story.id);
+    res.json({ ok: true });
+  });
+  app.get('/api/projects/:id/stories/:storyId/tasks', auth, (req, res) => {
+    const project = projectFor(req);
+    const story = get('SELECT id,title,points,epic_id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    const tasks = all('SELECT tasks.id,tasks.title,tasks.status,users.name AS assignee,sprints.name AS sprint FROM tasks JOIN users ON users.id=tasks.assignee_id JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.story_id=? ORDER BY sprints.id,tasks.position,tasks.id', story.id);
+    const done = tasks.filter(task => task.status === 'Terminado').length;
+    res.json({ story, tasks, done, total: tasks.length, progress: tasks.length ? Math.round(done * 100 / tasks.length) : 0 });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
