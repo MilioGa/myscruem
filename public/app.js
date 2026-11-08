@@ -59,7 +59,7 @@ async function load() {
   if (state.page === 'users' && state.user.role !== 'Administrador') state.page = 'projects';
   render();
 }
-const navItems = [['backlog', '☰', 'Product Backlog'], ['sprints', '◷', 'Sprints'], ['board', '▥', 'Tablero Kanban'], ['metrics', '↘', 'Métricas']];
+const navItems = [['backlog', '☰', 'Product Backlog'], ['sprints', '◷', 'Sprints'], ['board', '▥', 'Tablero Kanban'], ['metrics', '↘', 'Métricas'], ['impediments', '⚠', 'Impedimentos']];
 const activeProjects = () => state.projects.filter(project => !project.archived);
 const currentProject = () => {
   const active = activeProjects();
@@ -71,6 +71,7 @@ async function openNav(key) {
   if (key === 'backlog') return storiesDialog(project);
   if (key === 'sprints') return sprintsDialog(project);
   if (key === 'board') return boardDialog(project);
+  if (key === 'impediments') return impedimentsDialog(project);
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
     const sprint = sprints.find(item => item.status === 'Activo') || sprints.find(item => item.status === 'Cerrado') || sprints[0];
@@ -356,11 +357,12 @@ async function boardDialog(project) {
       const tasks = grouped.get(name);
       return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
     };
-    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
+    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-impediments" class="quiet">Impedimentos${board.tasks.some(task => task.impediment) ? ` (${board.tasks.filter(task => task.impediment).length})` : ''}</button><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
     document.querySelectorAll('[data-impediment]').forEach(button => button.onclick = event => { event.stopPropagation(); clearInterval(boardTimer); impedimentForm(project, board.tasks.find(task => task.id === Number(button.dataset.impediment))); });
     document.querySelectorAll('[data-filter-board]').forEach(input => input.onchange = () => { filters[input.dataset.filterBoard] = input.value; boardDialog(project); });
     document.querySelector('#clear-filters').onclick = () => { Object.assign(filters, { assignee: '', label: '', type: '' }); boardDialog(project); };
+    document.querySelector('#board-impediments').onclick = () => { clearInterval(boardTimer); impedimentsDialog(project, 'board'); };
     document.querySelector('#board-metrics').onclick = () => { clearInterval(boardTimer); burndownDialog(project, board.sprint.id, 'board'); };
     document.querySelector('#new-task')?.addEventListener('click', () => { clearInterval(boardTimer); taskForm(project, board); });
     clearInterval(boardTimer);
@@ -396,6 +398,25 @@ async function boardDialog(project) {
         };
       });
     }
+  } catch (error) { flash(error.message); }
+}
+async function impedimentsDialog(project, from = 'nav', status = 'Abierto') {
+  try {
+    clearInterval(boardTimer);
+    const items = await api(`/projects/${project.id}/impediments?status=${encodeURIComponent(status)}`);
+    const canClose = state.user.role === 'Scrum Master' && !project.archived;
+    dialog('Impedimentos', `<p class="muted">${escape(project.name)}</p><div class="tabs"><button data-imp-status="Abierto" class="${status === 'Abierto' ? 'active' : ''}">Abiertos</button><button data-imp-status="Cerrado" class="${status === 'Cerrado' ? 'active' : ''}">Cerrados</button></div>${items.length ? `<div class="impediment-list">${items.map(item => `<article class="impediment ${item.status === 'Abierto' ? 'open' : ''}"><div class="card-top"><strong>${escape(item.task)}</strong>${badge(item.status, item.status === 'Cerrado' ? 'green' : '')}</div><p>${escape(item.description)}</p><small class="muted">HU-${item.story_id} · ${escape(item.sprint)} · Reportó ${escape(item.reported_by)} el ${escape(item.created_at.slice(0, 10))}</small>${item.status === 'Cerrado' ? `<p class="solution"><strong>Solución:</strong> ${escape(item.solution)} <small>(${escape(item.closed_by)}, ${escape(item.closed_at.slice(0, 10))})</small></p>` : canClose ? `<form class="close-impediment" data-close-impediment="${item.id}"><input name="solution" required maxlength="500" placeholder="¿Cómo se resolvió?"><button type="submit" class="primary">Cerrar impedimento</button></form>` : ''}</article>`).join('')}</div>` : `<section class="empty"><h2>${status === 'Abierto' ? 'No hay impedimentos abiertos' : 'No hay impedimentos cerrados'}</h2><p>${status === 'Abierto' ? 'Cuando un Developer registre un bloqueo aparecerá aquí.' : 'Los impedimentos resueltos se conservan en este historial.'}</p></section>`}${from === 'board' ? '<div class="story-actions"><button id="back-board" class="quiet">Volver al tablero</button></div>' : ''}`);
+    document.querySelector('#back-board')?.addEventListener('click', () => boardDialog(project));
+    document.querySelectorAll('[data-imp-status]').forEach(button => button.onclick = () => impedimentsDialog(project, from, button.dataset.impStatus));
+    document.querySelectorAll('[data-close-impediment]').forEach(form => form.onsubmit = async event => {
+      event.preventDefault();
+      form.querySelector('button').disabled = true;
+      try {
+        await api(`/projects/${project.id}/impediments/${form.dataset.closeImpediment}/close`, 'POST', { solution: form.solution.value });
+        flash('Impedimento cerrado.');
+      } catch (error) { flash(error.message); }
+      await impedimentsDialog(project, from, status);
+    });
   } catch (error) { flash(error.message); }
 }
 function impedimentForm(project, task) {
