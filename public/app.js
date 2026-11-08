@@ -343,14 +343,23 @@ async function boardDialog(project) {
     const stories = new Map(board.stories.map(story => [story.id, story]));
     const canMove = state.user.role === 'Developer' && !project.archived;
     const card = task => `<article class="task-card" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const filters = state.boardFilters?.project === project.id ? state.boardFilters : { project: project.id, assignee: '', label: '', type: '' };
+    state.boardFilters = filters;
+    const visible = board.tasks.filter(task => (!filters.assignee || task.assignee_id === Number(filters.assignee)) && (!filters.label || task.label === filters.label) && (!filters.type || task.type === filters.type));
+    const active = Boolean(filters.assignee || filters.label || filters.type);
+    const people = [...new Map(board.tasks.map(task => [task.assignee_id, task.assignee])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    const select = (key, label, items) => `<label>${label}<select data-filter-board="${key}"><option value="">Todos</option>${items.map(([value, text]) => `<option value="${escape(value)}" ${String(filters[key]) === String(value) ? 'selected' : ''}>${escape(text)}</option>`).join('')}</select></label>`;
+    const filterBar = `<div class="board-filters">${select('assignee', 'Miembro', people)}${select('label', 'Etiqueta', board.labels.map(label => [label, label]))}${select('type', 'Tipo', board.types.map(type => [type, type]))}<button id="clear-filters" class="quiet" ${active ? '' : 'disabled'}>Limpiar filtros</button>${active ? `<span class="muted">Mostrando ${visible.length} de ${board.tasks.length} tareas</span>` : ''}</div>`;
     const grouped = new Map(board.columns.map(name => [name, []]));
-    for (const task of board.tasks) grouped.get(task.status)?.push(task);
+    for (const task of visible) grouped.get(task.status)?.push(task);
     const column = name => {
       const tasks = grouped.get(name);
       return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
     };
-    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div><div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
+    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    document.querySelectorAll('[data-filter-board]').forEach(input => input.onchange = () => { filters[input.dataset.filterBoard] = input.value; boardDialog(project); });
+    document.querySelector('#clear-filters').onclick = () => { Object.assign(filters, { assignee: '', label: '', type: '' }); boardDialog(project); };
     document.querySelector('#board-metrics').onclick = () => { clearInterval(boardTimer); burndownDialog(project, board.sprint.id, 'board'); };
     document.querySelector('#new-task')?.addEventListener('click', () => { clearInterval(boardTimer); taskForm(project, board); });
     clearInterval(boardTimer);
