@@ -83,7 +83,7 @@ function render() {
   const isAdmin = state.user.role === 'Administrador';
   const active = activeProjects();
   const current = currentProject();
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
+  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}<div class="nav-group"><small>APRENDIZAJE</small></div><button data-page="training" class="${state.page === 'training' ? 'selected' : ''}"><span>✎</span> Capacitación</button>${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : state.page === 'training' ? 'Capacitación' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : state.page === 'training' ? 'Capacitación en Scrum' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : state.page === 'training' ? 'Aprende el marco de trabajo y cómo usarlo en MySCruEm.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.page === 'projects' && state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
   document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => { state.page = button.dataset.page; state.query = ''; render(); });
   document.querySelectorAll('[data-nav]').forEach(button => button.onclick = () => openNav(button.dataset.nav));
   document.querySelector('#current-project')?.addEventListener('change', event => { state.currentProject = Number(event.target.value); });
@@ -95,12 +95,37 @@ function render() {
   document.querySelector('#new-project')?.addEventListener('click', () => projectDialog());
   renderContent();
 }
+async function renderTraining() {
+  const target = document.querySelector('#page-content');
+  try {
+    state.training ||= await api('/training');
+    const guide = state.training;
+    const module = guide.modules.find(item => item.id === state.trainingModule) || guide.modules[0];
+    target.innerHTML = `<p class="training-intro">${escape(guide.intro)}</p><div class="training"><nav class="training-modules" aria-label="Módulos de la guía">${guide.modules.map(item => `<button data-module="${item.id}" class="${item.id === module.id && !['infografias', 'glosario'].includes(state.trainingModule) ? 'selected' : ''}">${escape(item.title)}</button>`).join('')}<button data-module="infografias" class="${state.trainingModule === 'infografias' ? 'selected' : ''}">Infografías</button><button data-module="glosario" class="${state.trainingModule === 'glosario' ? 'selected' : ''}">Glosario (${guide.terms} términos)</button></nav><section class="training-body" id="training-body"></section></div>`;
+    const body = document.querySelector('#training-body');
+    if (state.trainingModule === 'infografias') {
+      body.innerHTML = `<h2>Infografías</h2><div class="infographics">${guide.infographics.map(item => `<figure><img src="${escape(item.src)}" alt="${escape(item.alt)}"><figcaption>${escape(item.title)}</figcaption></figure>`).join('')}</div>`;
+    } else if (state.trainingModule === 'glosario') {
+      body.innerHTML = `<h2>Glosario Scrum</h2><input id="glossary-search" placeholder="Buscar un término, por ejemplo: sprint" aria-label="Buscar en el glosario" value="${escape(state.glossaryQuery || '')}"><div id="glossary-results" class="glossary"></div>`;
+      const search = async () => {
+        const terms = await api(`/training/glossary?q=${encodeURIComponent(state.glossaryQuery || '')}`);
+        document.querySelector('#glossary-results').innerHTML = terms.length ? terms.map(item => `<article><h3>${escape(item.term)}</h3><p>${escape(item.definition)}</p><small><strong>En MySCruEm:</strong> ${escape(item.example)}</small></article>`).join('') : '<p class="muted">No encontramos ese término.</p>';
+      };
+      document.querySelector('#glossary-search').oninput = event => { state.glossaryQuery = event.target.value; clearTimeout(timer); timer = setTimeout(() => search().catch(error => flash(error.message)), 200); };
+      await search();
+    } else {
+      body.innerHTML = `<h2>${escape(module.title)}</h2><p class="muted">${escape(module.summary)}</p>${module.sections.map(section => `<article class="training-section"><h3>${escape(section.title)}</h3><p>${escape(section.body)}</p></article>`).join('')}`;
+    }
+    document.querySelectorAll('[data-module]').forEach(button => button.onclick = () => { state.trainingModule = button.dataset.module; renderTraining(); });
+  } catch (error) { target.innerHTML = ''; flash(error.message); }
+}
 function rememberProject(id) {
   state.currentProject = Number(id);
   const select = document.querySelector('#current-project');
   if (select && [...select.options].some(option => option.value === String(id))) select.value = String(id);
 }
 function renderContent() {
+  if (state.page === 'training') return renderTraining();
   const users = state.page === 'users';
   const source = users ? state.users : state.projects;
   const items = source.filter(item => (users || (state.filter === 'archived' ? item.archived : !item.archived)) && `${item.name} ${item.email || item.description}`.toLowerCase().includes(state.query.toLowerCase()));
