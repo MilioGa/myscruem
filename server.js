@@ -3,7 +3,7 @@ import helmet from 'helmet';
 import nodemailer from 'nodemailer';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,6 +78,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS epics (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id,name))');
   if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'epic_id')) db.exec('ALTER TABLE stories ADD COLUMN epic_id INTEGER REFERENCES epics(id)');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS impediments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Abierto' CHECK(status IN ('Abierto','Cerrado')), reported_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, solution TEXT, closed_by INTEGER REFERENCES users(id), closed_at TEXT);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
+  `);
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
@@ -425,7 +429,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (req.query.assignee) { filters.push('tasks.assignee_id=?'); values.push(Number(req.query.assignee) || 0); }
     if (req.query.label) { filters.push('tasks.label=?'); values.push(String(req.query.label)); }
     if (req.query.type) { filters.push('tasks.type=?'); values.push(String(req.query.type)); }
-    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type FROM tasks JOIN users ON users.id=tasks.assignee_id WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
+    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type,impediments.id AS impediment_id,impediments.description AS impediment FROM tasks JOIN users ON users.id=tasks.assignee_id LEFT JOIN impediments ON impediments.task_id=tasks.id AND impediments.status='Abierto' WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
     const labels = all("SELECT DISTINCT label FROM tasks WHERE sprint_id=? AND label<>'' ORDER BY label", sprint.id).map(row => row.label);
     const members = assignable(project);
     res.json({ sprint, columns, stories, tasks, members, types: taskTypes, labels });
@@ -578,6 +582,50 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const tasks = all('SELECT tasks.id,tasks.title,tasks.status,users.name AS assignee,sprints.name AS sprint FROM tasks JOIN users ON users.id=tasks.assignee_id JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.story_id=? ORDER BY sprints.id,tasks.position,tasks.id', story.id);
     const done = tasks.filter(task => task.status === 'Terminado').length;
     res.json({ story, tasks, done, total: tasks.length, progress: tasks.length ? Math.round(done * 100 / tasks.length) : 0 });
+  });
+  app.post('/api/projects/:id/tasks/:taskId/impediments', auth, (req, res) => {
+    const task = activeTaskFor(req);
+    const description = text(req.body.description, 'Descripción del impedimento', 500);
+    if (get("SELECT id FROM impediments WHERE task_id=? AND status='Abierto'", task.id)) fail('La tarea ya tiene un impedimento abierto.', 409);
+    const id = transaction(() => {
+      const created = Number(run('INSERT INTO impediments(task_id,description,reported_by,created_at) VALUES (?,?,?,?)', task.id, description, req.user.id, now().toISOString()).lastInsertRowid);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.get('/api/projects/:id/impediments', auth, (req, res) => {
+    const project = projectFor(req);
+    const status = req.query.status === 'Cerrado' ? 'Cerrado' : req.query.status === 'Todos' ? null : 'Abierto';
+    res.json(all(`SELECT impediments.id,impediments.description,impediments.status,impediments.created_at,impediments.solution,impediments.closed_at,tasks.id AS task_id,tasks.title AS task,tasks.story_id,sprints.name AS sprint,reporter.name AS reported_by,closer.name AS closed_by FROM impediments JOIN tasks ON tasks.id=impediments.task_id JOIN sprints ON sprints.id=tasks.sprint_id JOIN users reporter ON reporter.id=impediments.reported_by LEFT JOIN users closer ON closer.id=impediments.closed_by WHERE sprints.project_id=? ${status ? 'AND impediments.status=?' : ''} ORDER BY impediments.id DESC`, project.id, ...(status ? [status] : [])));
+  });
+  app.post('/api/projects/:id/impediments/:impedimentId/close', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede cerrar impedimentos.', 403);
+    const impediment = get('SELECT impediments.*,tasks.sprint_id FROM impediments JOIN tasks ON tasks.id=impediments.task_id JOIN sprints ON sprints.id=tasks.sprint_id WHERE impediments.id=? AND sprints.project_id=?', Number(req.params.impedimentId) || 0, project.id);
+    if (!impediment) fail('Impedimento no encontrado.', 404);
+    if (impediment.status !== 'Abierto') fail('El impedimento ya está cerrado.');
+    const solution = text(req.body.solution, 'Solución', 500);
+    transaction(() => {
+      run("UPDATE impediments SET status='Cerrado',solution=?,closed_by=?,closed_at=? WHERE id=?", solution, req.user.id, now().toISOString(), impediment.id);
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', impediment.sprint_id);
+    });
+    res.json({ ok: true });
+  });
+  const training = {
+    guide: JSON.parse(readFileSync(join(root, 'training', 'guia.json'), 'utf8')),
+    glossary: JSON.parse(readFileSync(join(root, 'training', 'glosario.json'), 'utf8')).terms,
+    infographics: [
+      { title: 'Ciclo del sprint', src: '/capacitacion/ciclo-sprint.svg', alt: 'Ciclo del sprint: planificación, sprint con Daily, revisión y retrospectiva.' },
+      { title: 'Tablero Kanban', src: '/capacitacion/tablero-kanban.svg', alt: 'Uso del tablero Kanban con sus cuatro columnas y tarjetas bloqueadas.' },
+      { title: 'Gráfico Burndown', src: '/capacitacion/burndown.svg', alt: 'Lectura del gráfico Burndown: línea ideal frente a puntos restantes.' }
+    ]
+  };
+  const plainText = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  app.get('/api/training', auth, (req, res) => res.json({ ...training.guide, infographics: training.infographics, terms: training.glossary.length }));
+  app.get('/api/training/glossary', auth, (req, res) => {
+    const query = plainText(typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '').trim();
+    res.json(query ? training.glossary.filter(item => plainText(`${item.term} ${item.definition}`).includes(query)) : training.glossary);
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));

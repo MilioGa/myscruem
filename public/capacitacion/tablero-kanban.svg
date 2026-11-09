@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="Arial, Helvetica, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Cómo usar el tablero Kanban</title>
+  <desc id="d">Cuatro columnas: Por hacer, En curso, En revisión y Terminado. Las tarjetas se arrastran de izquierda a derecha; una tarjeta bloqueada se marca en rojo.</desc>
+  <rect width="900" height="520" rx="24" fill="#f5f8fc"/>
+  <text x="450" y="52" text-anchor="middle" font-size="28" font-weight="bold" fill="#1f3a5f">Tablero Kanban</text>
+  <text x="450" y="80" text-anchor="middle" font-size="15" fill="#5b6577">Arrastra cada tarjeta a la columna que refleja su estado</text>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#e07a2d"/></marker></defs>
+  <g font-size="16" font-weight="bold" fill="#1f3a5f">
+    <rect x="40" y="110" width="195" height="330" rx="14" fill="#e9edf3"/><text x="60" y="142">Por hacer</text>
+    <rect x="252" y="110" width="195" height="330" rx="14" fill="#e9edf3"/><text x="272" y="142">En curso</text>
+    <rect x="464" y="110" width="195" height="330" rx="14" fill="#e9edf3"/><text x="484" y="142">En revisión</text>
+    <rect x="676" y="110" width="195" height="330" rx="14" fill="#e9edf3"/><text x="696" y="142">Terminado</text>
+  </g>
+  <g font-size="13">
+    <rect x="56" y="160" width="163" height="70" rx="8" fill="#fff" stroke="#dce2ea"/><text x="70" y="186" font-weight="bold" fill="#24324a">Formulario</text><rect x="70" y="200" width="78" height="20" rx="10" fill="#e6eefa"/><text x="80" y="214" font-size="11" fill="#254e80">Desarrollo</text>
+    <rect x="56" y="244" width="163" height="96" rx="8" fill="#fff6f5" stroke="#d64545" stroke-width="2"/><text x="70" y="270" font-weight="bold" fill="#24324a">Pagos</text><rect x="68" y="282" width="139" height="44" rx="6" fill="#fde8e6"/><text x="76" y="300" font-size="11" fill="#8f2a22">⚠ Impedimento:</text><text x="76" y="316" font-size="11" fill="#8f2a22">falta la llave de pruebas</text>
+    <rect x="268" y="160" width="163" height="70" rx="8" fill="#fff" stroke="#254e80" stroke-width="2"/><text x="282" y="186" font-weight="bold" fill="#24324a">Consulta</text><rect x="282" y="200" width="66" height="20" rx="10" fill="#e8f5ec"/><text x="291" y="214" font-size="11" fill="#2e7d4f">Pruebas</text>
+    <rect x="692" y="160" width="163" height="70" rx="8" fill="#fff" stroke="#dce2ea"/><text x="706" y="186" font-weight="bold" fill="#24324a">Registro</text><text x="706" y="212" font-size="11" fill="#2e7d4f">✓ Listo</text>
+  </g>
+  <path d="M220 195 L262 195" stroke="#e07a2d" stroke-width="3" marker-end="url(#a)"/>
+  <path d="M432 195 C450 195 456 260 480 262" stroke="#e07a2d" stroke-width="3" fill="none" stroke-dasharray="6 5" marker-end="url(#a)"/>
+  <rect x="480" y="236" width="163" height="56" rx="8" fill="none" stroke="#9fb0c8" stroke-width="2" stroke-dasharray="6 5"/>
+  <g font-size="13" fill="#24324a">
+    <circle cx="70" cy="470" r="11" fill="#254e80"/><text x="70" y="475" text-anchor="middle" fill="#fff" font-weight="bold">1</text><text x="88" y="475">Crea tareas con + Nueva tarea</text>
+    <circle cx="320" cy="470" r="11" fill="#254e80"/><text x="320" y="475" text-anchor="middle" fill="#fff" font-weight="bold">2</text><text x="338" y="475">Arrastra para cambiar el estado</text>
+    <circle cx="590" cy="470" r="11" fill="#254e80"/><text x="590" y="475" text-anchor="middle" fill="#fff" font-weight="bold">3</text><text x="608" y="475">Registra impedimentos si te bloqueas</text>
+  </g>
+</svg>

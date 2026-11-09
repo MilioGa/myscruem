@@ -1,0 +1,155 @@
+{
+  "title": "Glosario Scrum",
+  "terms": [
+    {
+      "term": "Criterios de aceptación",
+      "definition": "Condiciones verificables que una historia debe cumplir para considerarse terminada.",
+      "example": "Se escriben uno por línea al crear la historia."
+    },
+    {
+      "term": "Daily",
+      "definition": "Reunión diaria de máximo 15 minutos para revisar el avance hacia la meta.",
+      "example": "Conviene hacerla frente al tablero Kanban."
+    },
+    {
+      "term": "Definition of Done",
+      "definition": "Condiciones que debe cumplir el trabajo para considerarse terminado.",
+      "example": "Incluye pruebas aprobadas y revisión de otro integrante."
+    },
+    {
+      "term": "Definition of Ready",
+      "definition": "Condiciones que debe cumplir una historia para entrar a un sprint.",
+      "example": "Redacción completa, criterios verificables, estimación de 13 puntos o menos y prioridad validada."
+    },
+    {
+      "term": "Developer",
+      "definition": "Persona del equipo que construye el incremento de cada sprint.",
+      "example": "Estima historias, crea tareas, mueve tarjetas y registra impedimentos."
+    },
+    {
+      "term": "Empirismo",
+      "definition": "Forma de trabajo basada en la observación: transparencia, inspección y adaptación.",
+      "example": "El Burndown y el tablero hacen visible el avance para inspeccionarlo."
+    },
+    {
+      "term": "Épica",
+      "definition": "Historia grande que agrupa varias historias relacionadas.",
+      "example": "El Product Owner crea épicas y agrupa el backlog por ellas."
+    },
+    {
+      "term": "Equipo Scrum",
+      "definition": "Grupo formado por el Product Owner, el Scrum Master y los Developers.",
+      "example": "El administrador agrupa a las personas en equipos y los asigna a un proyecto."
+    },
+    {
+      "term": "Estimación",
+      "definition": "Acción de asignar un tamaño relativo a una historia.",
+      "example": "Solo los Developers asignan los puntos de las historias."
+    },
+    {
+      "term": "Gráfico Burndown",
+      "definition": "Gráfica que compara los puntos restantes con una línea ideal a lo largo del sprint.",
+      "example": "Se consulta en Métricas desde el tablero o la barra lateral."
+    },
+    {
+      "term": "Historia de usuario",
+      "definition": "Descripción breve de una necesidad desde el punto de vista de quien la usa.",
+      "example": "Se redacta con Como, Quiero y Para, más sus criterios de aceptación."
+    },
+    {
+      "term": "Impedimento",
+      "definition": "Obstáculo que impide avanzar en una tarea.",
+      "example": "Se registra en la tarjeta, que se resalta en rojo, y lo atiende el Scrum Master."
+    },
+    {
+      "term": "Incremento",
+      "definition": "Conjunto de trabajo terminado y utilizable al final de un sprint.",
+      "example": "Son las historias cuyas tareas llegaron a Terminado al cerrar el sprint."
+    },
+    {
+      "term": "Meta del sprint",
+      "definition": "Objetivo único que da sentido al trabajo de un sprint.",
+      "example": "Se escribe al crear el sprint y aparece en la parte superior del tablero."
+    },
+    {
+      "term": "MoSCoW",
+      "definition": "Técnica de priorización: Must, Should, Could y Won’t have.",
+      "example": "Cada historia del backlog tiene una de estas cuatro prioridades."
+    },
+    {
+      "term": "Planificación del sprint",
+      "definition": "Evento en el que se definen la meta y el trabajo del sprint.",
+      "example": "Se crea el sprint y se seleccionan historias estimadas."
+    },
+    {
+      "term": "Planning Poker",
+      "definition": "Técnica en la que el equipo estima al mismo tiempo y discute las diferencias.",
+      "example": "Ayuda a acordar los puntos antes de registrarlos en el backlog."
+    },
+    {
+      "term": "Product Backlog",
+      "definition": "Lista ordenada de todo lo que podría necesitar el producto.",
+      "example": "Se consulta desde Product Backlog en la barra lateral."
+    },
+    {
+      "term": "Product Owner",
+      "definition": "Rol responsable de maximizar el valor del producto y de gestionar el Product Backlog.",
+      "example": "Es quien crea las historias, las prioriza y gestiona las épicas del proyecto."
+    },
+    {
+      "term": "Puntos de historia",
+      "definition": "Medida relativa del tamaño o esfuerzo de una historia.",
+      "example": "Se usan los valores 1, 2, 3, 5, 8, 13 y 21."
+    },
+    {
+      "term": "Retrospectiva",
+      "definition": "Evento en el que el equipo analiza cómo trabajó y acuerda mejoras.",
+      "example": "Se realiza después de la revisión y antes del siguiente sprint."
+    },
+    {
+      "term": "Revisión del sprint",
+      "definition": "Evento al final del sprint para mostrar el incremento y recibir retroalimentación.",
+      "example": "Se presentan las historias terminadas antes de cerrar el sprint."
+    },
+    {
+      "term": "Scrum",
+      "definition": "Marco de trabajo ligero para desarrollar productos complejos en ciclos cortos llamados sprints.",
+      "example": "MySCruEm organiza proyectos, historias, sprints y tareas siguiendo Scrum."
+    },
+    {
+      "term": "Scrum Master",
+      "definition": "Rol que facilita los eventos, ayuda al equipo a aplicar Scrum y elimina impedimentos.",
+      "example": "Inicia y cierra sprints y cierra los impedimentos indicando la solución."
+    },
+    {
+      "term": "Sprint",
+      "definition": "Periodo de duración fija en el que el equipo construye un incremento del producto.",
+      "example": "En MySCruEm cada sprint dura una semana y tiene fecha de inicio, fin y meta."
+    },
+    {
+      "term": "Sprint Backlog",
+      "definition": "Historias seleccionadas para el sprint y tareas para terminarlas.",
+      "example": "Los Developers lo arman al planificar el sprint desde la lista de sprints."
+    },
+    {
+      "term": "Tablero Kanban",
+      "definition": "Tablero visual con columnas que muestran el estado de cada tarea.",
+      "example": "Tiene las columnas Por hacer, En curso, En revisión y Terminado."
+    },
+    {
+      "term": "Tarea",
+      "definition": "Unidad de trabajo concreta en la que se divide una historia.",
+      "example": "Se crea desde el tablero con título, responsable, tipo y etiqueta."
+    },
+    {
+      "term": "Timebox",
+      "definition": "Duración máxima fija asignada a un evento.",
+      "example": "La Daily tiene un timebox de 15 minutos."
+    },
+    {
+      "term": "Velocidad",
+      "definition": "Cantidad de puntos que el equipo completa por sprint.",
+      "example": "Sirve para estimar cuánto trabajo comprometer en los siguientes sprints."
+    }
+  ]
+}

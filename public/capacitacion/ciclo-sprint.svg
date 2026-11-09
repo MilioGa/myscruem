@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="Arial, Helvetica, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Ciclo del sprint en Scrum</title>
+  <desc id="d">El Product Backlog alimenta la planificación; durante el sprint hay una Daily diaria; al final se hace la revisión y la retrospectiva y se obtiene un incremento.</desc>
+  <rect width="900" height="520" rx="24" fill="#f5f8fc"/>
+  <text x="450" y="52" text-anchor="middle" font-size="28" font-weight="bold" fill="#1f3a5f">Ciclo del sprint</text>
+  <text x="450" y="80" text-anchor="middle" font-size="15" fill="#5b6577">Un ciclo de duración fija para construir, revisar y mejorar</text>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#254e80"/></marker></defs>
+  <g>
+    <rect x="40" y="200" width="170" height="120" rx="14" fill="#fff" stroke="#c9d4e3"/>
+    <text x="125" y="238" text-anchor="middle" font-size="17" font-weight="bold" fill="#1f3a5f">Product</text>
+    <text x="125" y="260" text-anchor="middle" font-size="17" font-weight="bold" fill="#1f3a5f">Backlog</text>
+    <text x="125" y="290" text-anchor="middle" font-size="12" fill="#5b6577">Historias ordenadas</text>
+    <text x="125" y="306" text-anchor="middle" font-size="12" fill="#5b6577">por el Product Owner</text>
+  </g>
+  <line x1="214" y1="260" x2="262" y2="260" stroke="#254e80" stroke-width="3" marker-end="url(#a)"/>
+  <g>
+    <rect x="268" y="200" width="160" height="120" rx="14" fill="#254e80"/>
+    <text x="348" y="240" text-anchor="middle" font-size="17" font-weight="bold" fill="#fff">1. Planificación</text>
+    <text x="348" y="268" text-anchor="middle" font-size="12" fill="#dbe6f4">Meta del sprint</text>
+    <text x="348" y="285" text-anchor="middle" font-size="12" fill="#dbe6f4">y Sprint Backlog</text>
+  </g>
+  <circle cx="560" cy="260" r="118" fill="#fff" stroke="#254e80" stroke-width="3" stroke-dasharray="10 8"/>
+  <text x="560" y="230" text-anchor="middle" font-size="18" font-weight="bold" fill="#1f3a5f">2. Sprint</text>
+  <text x="560" y="254" text-anchor="middle" font-size="13" fill="#5b6577">1 semana en MySCruEm</text>
+  <rect x="490" y="272" width="140" height="44" rx="22" fill="#e07a2d"/>
+  <text x="560" y="300" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">Daily · 15 min</text>
+  <line x1="432" y1="260" x2="438" y2="260" stroke="#254e80" stroke-width="3" marker-end="url(#a)"/>
+  <line x1="680" y1="260" x2="716" y2="260" stroke="#254e80" stroke-width="3" marker-end="url(#a)"/>
+  <g>
+    <rect x="722" y="130" width="150" height="96" rx="14" fill="#fff" stroke="#c9d4e3"/>
+    <text x="797" y="168" text-anchor="middle" font-size="16" font-weight="bold" fill="#1f3a5f">3. Revisión</text>
+    <text x="797" y="192" text-anchor="middle" font-size="12" fill="#5b6577">Se muestra el</text>
+    <text x="797" y="208" text-anchor="middle" font-size="12" fill="#5b6577">incremento</text>
+    <rect x="722" y="294" width="150" height="96" rx="14" fill="#fff" stroke="#c9d4e3"/>
+    <text x="797" y="332" text-anchor="middle" font-size="16" font-weight="bold" fill="#1f3a5f">4. Retrospectiva</text>
+    <text x="797" y="356" text-anchor="middle" font-size="12" fill="#5b6577">Cómo mejorar</text>
+    <text x="797" y="372" text-anchor="middle" font-size="12" fill="#5b6577">el siguiente sprint</text>
+  </g>
+  <path d="M797 394 C797 470 348 480 348 326" fill="none" stroke="#9fb0c8" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#a)"/>
+  <text x="560" y="470" text-anchor="middle" font-size="13" fill="#5b6577">Al cerrar, lo no terminado regresa al Product Backlog y comienza el siguiente sprint</text>
+</svg>

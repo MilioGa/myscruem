@@ -59,7 +59,7 @@ async function load() {
   if (state.page === 'users' && state.user.role !== 'Administrador') state.page = 'projects';
   render();
 }
-const navItems = [['backlog', '☰', 'Product Backlog'], ['sprints', '◷', 'Sprints'], ['board', '▥', 'Tablero Kanban'], ['metrics', '↘', 'Métricas']];
+const navItems = [['backlog', '☰', 'Product Backlog'], ['sprints', '◷', 'Sprints'], ['board', '▥', 'Tablero Kanban'], ['metrics', '↘', 'Métricas'], ['impediments', '⚠', 'Impedimentos']];
 const activeProjects = () => state.projects.filter(project => !project.archived);
 const currentProject = () => {
   const active = activeProjects();
@@ -71,6 +71,7 @@ async function openNav(key) {
   if (key === 'backlog') return storiesDialog(project);
   if (key === 'sprints') return sprintsDialog(project);
   if (key === 'board') return boardDialog(project);
+  if (key === 'impediments') return impedimentsDialog(project);
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
     const sprint = sprints.find(item => item.status === 'Activo') || sprints.find(item => item.status === 'Cerrado') || sprints[0];
@@ -82,7 +83,7 @@ function render() {
   const isAdmin = state.user.role === 'Administrador';
   const active = activeProjects();
   const current = currentProject();
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
+  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}<div class="nav-group"><small>APRENDIZAJE</small></div><button data-page="training" class="${state.page === 'training' ? 'selected' : ''}"><span>✎</span> Capacitación</button>${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : state.page === 'training' ? 'Capacitación' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : state.page === 'training' ? 'Capacitación en Scrum' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : state.page === 'training' ? 'Aprende el marco de trabajo y cómo usarlo en MySCruEm.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.page === 'projects' && state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
   document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => { state.page = button.dataset.page; state.query = ''; render(); });
   document.querySelectorAll('[data-nav]').forEach(button => button.onclick = () => openNav(button.dataset.nav));
   document.querySelector('#current-project')?.addEventListener('change', event => { state.currentProject = Number(event.target.value); });
@@ -94,12 +95,37 @@ function render() {
   document.querySelector('#new-project')?.addEventListener('click', () => projectDialog());
   renderContent();
 }
+async function renderTraining() {
+  const target = document.querySelector('#page-content');
+  try {
+    state.training ||= await api('/training');
+    const guide = state.training;
+    const module = guide.modules.find(item => item.id === state.trainingModule) || guide.modules[0];
+    target.innerHTML = `<p class="training-intro">${escape(guide.intro)}</p><div class="training"><nav class="training-modules" aria-label="Módulos de la guía">${guide.modules.map(item => `<button data-module="${item.id}" class="${item.id === module.id && !['infografias', 'glosario'].includes(state.trainingModule) ? 'selected' : ''}">${escape(item.title)}</button>`).join('')}<button data-module="infografias" class="${state.trainingModule === 'infografias' ? 'selected' : ''}">Infografías</button><button data-module="glosario" class="${state.trainingModule === 'glosario' ? 'selected' : ''}">Glosario (${guide.terms} términos)</button></nav><section class="training-body" id="training-body"></section></div>`;
+    const body = document.querySelector('#training-body');
+    if (state.trainingModule === 'infografias') {
+      body.innerHTML = `<h2>Infografías</h2><div class="infographics">${guide.infographics.map(item => `<figure><img src="${escape(item.src)}" alt="${escape(item.alt)}"><figcaption>${escape(item.title)}</figcaption></figure>`).join('')}</div>`;
+    } else if (state.trainingModule === 'glosario') {
+      body.innerHTML = `<h2>Glosario Scrum</h2><input id="glossary-search" placeholder="Buscar un término, por ejemplo: sprint" aria-label="Buscar en el glosario" value="${escape(state.glossaryQuery || '')}"><div id="glossary-results" class="glossary"></div>`;
+      const search = async () => {
+        const terms = await api(`/training/glossary?q=${encodeURIComponent(state.glossaryQuery || '')}`);
+        document.querySelector('#glossary-results').innerHTML = terms.length ? terms.map(item => `<article><h3>${escape(item.term)}</h3><p>${escape(item.definition)}</p><small><strong>En MySCruEm:</strong> ${escape(item.example)}</small></article>`).join('') : '<p class="muted">No encontramos ese término.</p>';
+      };
+      document.querySelector('#glossary-search').oninput = event => { state.glossaryQuery = event.target.value; clearTimeout(timer); timer = setTimeout(() => search().catch(error => flash(error.message)), 200); };
+      await search();
+    } else {
+      body.innerHTML = `<h2>${escape(module.title)}</h2><p class="muted">${escape(module.summary)}</p>${module.sections.map(section => `<article class="training-section"><h3>${escape(section.title)}</h3><p>${escape(section.body)}</p></article>`).join('')}`;
+    }
+    document.querySelectorAll('[data-module]').forEach(button => button.onclick = () => { state.trainingModule = button.dataset.module; renderTraining(); });
+  } catch (error) { target.innerHTML = ''; flash(error.message); }
+}
 function rememberProject(id) {
   state.currentProject = Number(id);
   const select = document.querySelector('#current-project');
   if (select && [...select.options].some(option => option.value === String(id))) select.value = String(id);
 }
 function renderContent() {
+  if (state.page === 'training') return renderTraining();
   const users = state.page === 'users';
   const source = users ? state.users : state.projects;
   const items = source.filter(item => (users || (state.filter === 'archived' ? item.archived : !item.archived)) && `${item.name} ${item.email || item.description}`.toLowerCase().includes(state.query.toLowerCase()));
@@ -342,7 +368,7 @@ async function boardDialog(project) {
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
     const canMove = state.user.role === 'Developer' && !project.archived;
-    const card = task => `<article class="task-card" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div><div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''}" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
     const filters = state.boardFilters?.project === project.id ? state.boardFilters : { project: project.id, assignee: '', label: '', type: '' };
     state.boardFilters = filters;
     const visible = board.tasks.filter(task => (!filters.assignee || task.assignee_id === Number(filters.assignee)) && (!filters.label || task.label === filters.label) && (!filters.type || task.type === filters.type));
@@ -356,10 +382,12 @@ async function boardDialog(project) {
       const tasks = grouped.get(name);
       return `<section class="board-column" data-column="${escape(name)}"><h3>${escape(name)} <span>${tasks.length}</span></h3><div class="board-cards">${tasks.map(card).join('') || '<p class="muted">Sin tarjetas</p>'}</div></section>`;
     };
-    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
+    dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-impediments" class="quiet">Impedimentos${board.tasks.some(task => task.impediment) ? ` (${board.tasks.filter(task => task.impediment).length})` : ''}</button><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    document.querySelectorAll('[data-impediment]').forEach(button => button.onclick = event => { event.stopPropagation(); clearInterval(boardTimer); impedimentForm(project, board.tasks.find(task => task.id === Number(button.dataset.impediment))); });
     document.querySelectorAll('[data-filter-board]').forEach(input => input.onchange = () => { filters[input.dataset.filterBoard] = input.value; boardDialog(project); });
     document.querySelector('#clear-filters').onclick = () => { Object.assign(filters, { assignee: '', label: '', type: '' }); boardDialog(project); };
+    document.querySelector('#board-impediments').onclick = () => { clearInterval(boardTimer); impedimentsDialog(project, 'board'); };
     document.querySelector('#board-metrics').onclick = () => { clearInterval(boardTimer); burndownDialog(project, board.sprint.id, 'board'); };
     document.querySelector('#new-task')?.addEventListener('click', () => { clearInterval(boardTimer); taskForm(project, board); });
     clearInterval(boardTimer);
@@ -396,6 +424,33 @@ async function boardDialog(project) {
       });
     }
   } catch (error) { flash(error.message); }
+}
+async function impedimentsDialog(project, from = 'nav', status = 'Abierto') {
+  try {
+    clearInterval(boardTimer);
+    const items = await api(`/projects/${project.id}/impediments?status=${encodeURIComponent(status)}`);
+    const canClose = state.user.role === 'Scrum Master' && !project.archived;
+    dialog('Impedimentos', `<p class="muted">${escape(project.name)}</p><div class="tabs"><button data-imp-status="Abierto" class="${status === 'Abierto' ? 'active' : ''}">Abiertos</button><button data-imp-status="Cerrado" class="${status === 'Cerrado' ? 'active' : ''}">Cerrados</button></div>${items.length ? `<div class="impediment-list">${items.map(item => `<article class="impediment ${item.status === 'Abierto' ? 'open' : ''}"><div class="card-top"><strong>${escape(item.task)}</strong>${badge(item.status, item.status === 'Cerrado' ? 'green' : '')}</div><p>${escape(item.description)}</p><small class="muted">HU-${item.story_id} · ${escape(item.sprint)} · Reportó ${escape(item.reported_by)} el ${escape(item.created_at.slice(0, 10))}</small>${item.status === 'Cerrado' ? `<p class="solution"><strong>Solución:</strong> ${escape(item.solution)} <small>(${escape(item.closed_by)}, ${escape(item.closed_at.slice(0, 10))})</small></p>` : canClose ? `<form class="close-impediment" data-close-impediment="${item.id}"><input name="solution" required maxlength="500" placeholder="¿Cómo se resolvió?"><button type="submit" class="primary">Cerrar impedimento</button></form>` : ''}</article>`).join('')}</div>` : `<section class="empty"><h2>${status === 'Abierto' ? 'No hay impedimentos abiertos' : 'No hay impedimentos cerrados'}</h2><p>${status === 'Abierto' ? 'Cuando un Developer registre un bloqueo aparecerá aquí.' : 'Los impedimentos resueltos se conservan en este historial.'}</p></section>`}${from === 'board' ? '<div class="story-actions"><button id="back-board" class="quiet">Volver al tablero</button></div>' : ''}`);
+    document.querySelector('#back-board')?.addEventListener('click', () => boardDialog(project));
+    document.querySelectorAll('[data-imp-status]').forEach(button => button.onclick = () => impedimentsDialog(project, from, button.dataset.impStatus));
+    document.querySelectorAll('[data-close-impediment]').forEach(form => form.onsubmit = async event => {
+      event.preventDefault();
+      form.querySelector('button').disabled = true;
+      try {
+        await api(`/projects/${project.id}/impediments/${form.dataset.closeImpediment}/close`, 'POST', { solution: form.solution.value });
+        flash('Impedimento cerrado.');
+      } catch (error) { flash(error.message); }
+      await impedimentsDialog(project, from, status);
+    });
+  } catch (error) { flash(error.message); }
+}
+function impedimentForm(project, task) {
+  dialog('Registrar impedimento', `<form><p class="muted">Tarea: ${escape(task.title)}</p><label>¿Qué impide avanzar?<textarea name="description" required maxlength="500" rows="4" placeholder="Describe el bloqueo y lo que necesitas para resolverlo"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver</button><button type="submit" class="primary">Registrar impedimento</button></div></form>`, async data => {
+    await api(`/projects/${project.id}/tasks/${task.id}/impediments`, 'POST', data);
+    await boardDialog(project);
+    flash('Impedimento registrado. El Scrum Master lo verá en su lista.');
+  });
+  document.querySelector('#back-board').onclick = () => boardDialog(project);
 }
 function taskForm(project, board) {
   const options = (items, label) => items.map(item => `<option value="${item.id}">${escape(label(item))}</option>`).join('');

@@ -1,0 +1,50 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { setup } from './support.js';
+
+test('Impedimentos: registro, resaltado en el tablero, lista y cierre por el Scrum Master', async () => {
+  const f = await setup();
+  try {
+    const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 3 });
+    const sprints = `/projects/${f.project.id}/sprints`;
+    const sprint = await f.master(sprints, 'POST', { name: 'Sprint 4', startDate: '2026-11-04', endDate: '2026-11-10', goal: 'Impedimentos' }, 201);
+    await f.developer(`${sprints}/${sprint.id}/stories`, 'POST', { storyId: story.id }, 201);
+    await f.master(`${sprints}/${sprint.id}/start`, 'POST');
+    const developerId = (await f.admin('/users')).find(user => user.role === 'Developer').id;
+    const task = await f.developer(`/projects/${f.project.id}/tasks`, 'POST', { title: 'Integrar pagos', storyId: story.id, assigneeId: developerId }, 201);
+    const report = `/projects/${f.project.id}/tasks/${task.id}/impediments`;
+    const list = `/projects/${f.project.id}/impediments`;
+    const board = `/projects/${f.project.id}/board`;
+    await f.owner(report, 'POST', { description: 'Sin acceso' }, 403);
+    await f.master(report, 'POST', { description: 'Sin acceso' }, 403);
+    await f.outside(report, 'POST', { description: 'Sin acceso' }, 404);
+    await f.developer(report, 'POST', { description: '' }, 400);
+    const { version } = await f.developer(`${board}/version`);
+    const created = await f.developer(report, 'POST', { description: 'Falta la llave de pruebas del proveedor de pagos' }, 201);
+    await f.developer(report, 'POST', { description: 'Otro bloqueo' }, 409);
+    assert.equal((await f.developer(`${board}/version`)).version, version + 1);
+    let result = await f.owner(board);
+    assert.equal(result.tasks[0].impediment, 'Falta la llave de pruebas del proveedor de pagos');
+    let open = await f.owner(list);
+    assert.equal(open.length, 1);
+    assert.deepEqual([open[0].task, open[0].reported_by, open[0].status], ['Integrar pagos', 'developer', 'Abierto']);
+    const close = `${list}/${created.id}/close`;
+    await f.developer(close, 'POST', { solution: 'Listo' }, 403);
+    await f.owner(close, 'POST', { solution: 'Listo' }, 403);
+    await f.outside(close, 'POST', { solution: 'Listo' }, 404);
+    await f.master(close, 'POST', { solution: '' }, 400);
+    await f.master(close, 'POST', { solution: 'El proveedor envió la llave' });
+    await f.master(close, 'POST', { solution: 'Otra vez' }, 400);
+    assert.deepEqual(await f.developer(list), []);
+    const closed = await f.developer(`${list}?status=Cerrado`);
+    assert.deepEqual([closed[0].solution, closed[0].closed_by], ['El proveedor envió la llave', 'master']);
+    assert.equal((await f.developer(`${list}?status=Todos`)).length, 1);
+    result = await f.owner(board);
+    assert.equal(result.tasks[0].impediment, null);
+    assert.equal(result.tasks[0].status, 'Por hacer');
+    await f.developer(report, 'POST', { description: 'Nuevo bloqueo' }, 201);
+    assert.equal((await f.master(list)).length, 1);
+    await f.outside(list, 'GET', undefined, 404);
+  } finally { await f.close(); }
+});
