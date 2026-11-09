@@ -51,10 +51,15 @@ try {
   const sprint = await master.request(`/projects/${project.id}/sprints`, 'POST', { name: 'Sprint 3', startDate: date(0), endDate: date(6), goal: 'Tablero Kanban y gráfico Burndown operativos.' });
   for (const id of ids.slice(0, 3)) await developer.request(`/projects/${project.id}/sprints/${sprint.id}/stories`, 'POST', { storyId: id });
   await master.request(`/projects/${project.id}/sprints/${sprint.id}/start`, 'POST');
-  const tasks = [[ids[0], 'Formulario de registro', developer, 'Terminado'], [ids[0], 'Pruebas de registro', second, 'Terminado'], [ids[1], 'Listado de pedidos', developer, 'En curso'], [ids[1], 'Filtro por estado', second, 'En revisión'], [ids[2], 'Consulta de ventas', developer, 'Por hacer'], [ids[2], 'Gráfica mensual', second, 'Por hacer']];
-  for (const [storyId, title, person, status] of tasks) {
-    const task = await developer.request(`/projects/${project.id}/tasks`, 'POST', { title, storyId, assigneeId: person.id });
+  await admin('/teams', 'POST', { name: 'Equipo Portal', projectId: project.id, memberIds: [owner.id, master.id, developer.id, second.id] });
+  const clientes = await owner.request(`/projects/${project.id}/epics`, 'POST', { name: 'Clientes', description: 'Registro y perfil de los clientes.' });
+  const ventas = await owner.request(`/projects/${project.id}/epics`, 'POST', { name: 'Pedidos y ventas', description: 'Pedidos, consultas y reportes.' });
+  for (const [index, epic] of [[0, clientes], [3, clientes], [1, ventas], [2, ventas]]) await owner.request(`/projects/${project.id}/stories/${ids[index]}/epic`, 'PATCH', { epicId: epic.id });
+  const tasks = [[ids[0], 'Formulario de registro', developer, 'Terminado', 'Frontend', 'Desarrollo'], [ids[0], 'Pruebas de registro', second, 'Terminado', 'Backend', 'Pruebas'], [ids[1], 'Listado de pedidos', developer, 'En curso', 'Frontend', 'Desarrollo'], [ids[1], 'Filtro por estado', second, 'En revisión', 'Backend', 'Desarrollo'], [ids[2], 'Consulta de ventas', developer, 'Por hacer', 'Backend', 'Desarrollo'], [ids[2], 'Gráfica mensual', second, 'Por hacer', 'Frontend', 'Diseño'], [ids[2], 'Manual del reporte', second, 'Por hacer', '', 'Documentación']];
+  for (const [storyId, title, person, status, label, type] of tasks) {
+    const task = await developer.request(`/projects/${project.id}/tasks`, 'POST', { title, storyId, assigneeId: person.id, label, type });
     if (status !== 'Por hacer') await developer.request(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status });
+    if (title === 'Consulta de ventas') await developer.request(`/projects/${project.id}/tasks/${task.id}/impediments`, 'POST', { description: 'Falta acceso a la base de ventas de prueba.' });
   }
   console.log(`Datos de demostración creados. Código: empresa-demo · Contraseña: ${password}`);
   console.log('Usuarios: admin@demo.test, po@demo.test, sm@demo.test, dev@demo.test, dev2@demo.test');
