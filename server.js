@@ -3,7 +3,7 @@ import helmet from 'helmet';
 import nodemailer from 'nodemailer';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -611,6 +611,21 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', impediment.sprint_id);
     });
     res.json({ ok: true });
+  });
+  const training = {
+    guide: JSON.parse(readFileSync(join(root, 'training', 'guia.json'), 'utf8')),
+    glossary: JSON.parse(readFileSync(join(root, 'training', 'glosario.json'), 'utf8')).terms,
+    infographics: [
+      { title: 'Ciclo del sprint', src: '/capacitacion/ciclo-sprint.svg', alt: 'Ciclo del sprint: planificación, sprint con Daily, revisión y retrospectiva.' },
+      { title: 'Tablero Kanban', src: '/capacitacion/tablero-kanban.svg', alt: 'Uso del tablero Kanban con sus cuatro columnas y tarjetas bloqueadas.' },
+      { title: 'Gráfico Burndown', src: '/capacitacion/burndown.svg', alt: 'Lectura del gráfico Burndown: línea ideal frente a puntos restantes.' }
+    ]
+  };
+  const plainText = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  app.get('/api/training', auth, (req, res) => res.json({ ...training.guide, infographics: training.infographics, terms: training.glossary.length }));
+  app.get('/api/training/glossary', auth, (req, res) => {
+    const query = plainText(typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '').trim();
+    res.json(query ? training.glossary.filter(item => plainText(`${item.term} ${item.definition}`).includes(query)) : training.glossary);
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
