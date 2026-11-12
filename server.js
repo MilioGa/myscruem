@@ -82,6 +82,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS impediments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Abierto' CHECK(status IN ('Abierto','Cerrado')), reported_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, solution TEXT, closed_by INTEGER REFERENCES users(id), closed_at TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
   `);
+  db.exec('CREATE TABLE IF NOT EXISTS definition_of_done (project_id INTEGER PRIMARY KEY REFERENCES projects(id), criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
@@ -626,6 +627,21 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.get('/api/training/glossary', auth, (req, res) => {
     const query = plainText(typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '').trim();
     res.json(query ? training.glossary.filter(item => plainText(`${item.term} ${item.definition}`).includes(query)) : training.glossary);
+  });
+  app.get('/api/projects/:id/dod', auth, (req, res) => {
+    const project = projectFor(req);
+    const dod = get('SELECT definition_of_done.criteria,definition_of_done.updated_at,users.name AS updated_by FROM definition_of_done LEFT JOIN users ON users.id=definition_of_done.updated_by WHERE project_id=?', project.id);
+    res.json(dod ? { criteria: JSON.parse(dod.criteria), updated_at: dod.updated_at, updated_by: dod.updated_by } : { criteria: [], updated_at: null, updated_by: null });
+  });
+  app.put('/api/projects/:id/dod', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede definir la Definition of Done.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    if (!Array.isArray(req.body.criteria) || req.body.criteria.length > 15) fail('La Definition of Done admite hasta 15 criterios.');
+    const criteria = req.body.criteria.map(item => text(item, 'Criterio', 200));
+    if (new Set(criteria.map(item => item.toLowerCase())).size !== criteria.length) fail('Los criterios no pueden repetirse.');
+    run('INSERT INTO definition_of_done(project_id,criteria,updated_by,updated_at) VALUES (?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET criteria=excluded.criteria,updated_by=excluded.updated_by,updated_at=excluded.updated_at', project.id, JSON.stringify(criteria), req.user.id, now().toISOString());
+    res.json({ criteria });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
