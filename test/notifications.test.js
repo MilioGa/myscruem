@@ -1,0 +1,51 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { setup } from './support.js';
+
+test('Notificaciones de asignación, cambio de estado e impedimentos, privadas por usuario', async () => {
+  const f = await setup();
+  try {
+    const users = await f.admin('/users');
+    const developerId = users.find(user => user.name === 'developer').id;
+    const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 3 });
+    const sprints = `/projects/${f.project.id}/sprints`;
+    const sprint = await f.master(sprints, 'POST', { name: 'Sprint 5', startDate: '2026-11-11', endDate: '2026-11-17', goal: 'Avisos' }, 201);
+    await f.developer(`${sprints}/${sprint.id}/stories`, 'POST', { storyId: story.id }, 201);
+    await f.master(`${sprints}/${sprint.id}/start`, 'POST');
+    const second = await f.admin('/users', 'POST', { name: 'segundo', email: 'segundo@example.com', role: 'Developer' }, 201);
+    f.db.prepare("UPDATE users SET status='Activo' WHERE id=?").run(second.id);
+    const tasks = `/projects/${f.project.id}/tasks`;
+    await f.developer(tasks, 'POST', { title: 'Propia', storyId: story.id, assigneeId: developerId }, 201);
+    assert.equal((await f.developer('/notifications')).unread, 0);
+    const assigned = await f.developer(tasks, 'POST', { title: 'Para segundo', storyId: story.id, assigneeId: second.id }, 201);
+    const secondId = second.id;
+    let rows = f.db.prepare('SELECT * FROM notifications WHERE user_id=?').all(secondId);
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].message, /te asignó la tarea "Para segundo" en Portal/);
+    const own = (await f.developer(`/projects/${f.project.id}/board`)).tasks.find(task => task.title === 'Propia');
+    await f.developer(`${tasks}/${assigned.id}/status`, 'PATCH', { status: 'En curso' });
+    await f.developer(`${tasks}/${assigned.id}/status`, 'PATCH', { status: 'En curso' });
+    rows = f.db.prepare('SELECT kind,message FROM notifications WHERE user_id=? ORDER BY id').all(secondId);
+    assert.deepEqual(rows.map(row => row.kind), ['Asignación', 'Cambio de estado']);
+    assert.match(rows[1].message, /movió tu tarea "Para segundo" a En curso/);
+    const impediment = await f.developer(`${tasks}/${own.id}/impediments`, 'POST', { description: 'Bloqueo' }, 201);
+    await f.master(`/projects/${f.project.id}/impediments/${impediment.id}/close`, 'POST', { solution: 'Resuelto' });
+    let mine = await f.developer('/notifications');
+    assert.equal(mine.unread, 1);
+    assert.deepEqual([mine.items[0].kind, mine.items[0].actor, mine.items[0].project], ['Impedimento', 'master', 'Portal']);
+    assert.equal((await f.master('/notifications')).unread, 0);
+    assert.deepEqual((await f.outside('/notifications')).items, []);
+    await f.developer('/notifications/read', 'POST', { ids: [] }, 400);
+    await f.developer('/notifications/read', 'POST', { ids: ['1'] }, 400);
+    const othersId = f.db.prepare('SELECT id FROM notifications WHERE user_id=?').get(secondId).id;
+    await f.developer('/notifications/read', 'POST', { ids: [othersId] });
+    assert.equal(f.db.prepare('SELECT read FROM notifications WHERE id=?').get(othersId).read, 0);
+    assert.deepEqual(await f.developer('/notifications/read', 'POST', { ids: [mine.items[0].id] }), { unread: 0 });
+    mine = await f.developer('/notifications');
+    assert.equal(mine.items[0].read, 1);
+    f.db.prepare('UPDATE notifications SET read=0').run();
+    assert.deepEqual(await f.developer('/notifications/read', 'POST', { all: true }), { unread: 0 });
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0').get(secondId).total, 2);
+  } finally { await f.close(); }
+});
