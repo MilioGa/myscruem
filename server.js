@@ -654,6 +654,20 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('INSERT INTO definition_of_done(project_id,criteria,updated_by,updated_at) VALUES (?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET criteria=excluded.criteria,updated_by=excluded.updated_by,updated_at=excluded.updated_at', project.id, JSON.stringify(criteria), req.user.id, now().toISOString());
     res.json({ criteria });
   });
+  app.get('/api/notifications', auth, (req, res) => {
+    const unread = get('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0', req.user.id).total;
+    const items = all('SELECT notifications.id,notifications.kind,notifications.message,notifications.read,notifications.created_at,notifications.project_id,notifications.task_id,projects.name AS project,actor.name AS actor FROM notifications LEFT JOIN projects ON projects.id=notifications.project_id LEFT JOIN users actor ON actor.id=notifications.actor_id WHERE notifications.user_id=? ORDER BY notifications.id DESC LIMIT 30', req.user.id);
+    res.json({ unread, items });
+  });
+  app.post('/api/notifications/read', auth, (req, res) => {
+    if (req.body.all === true) {
+      run('UPDATE notifications SET read=1 WHERE user_id=? AND read=0', req.user.id);
+    } else {
+      if (!Array.isArray(req.body.ids) || !req.body.ids.length || req.body.ids.length > 100 || !req.body.ids.every(Number.isSafeInteger)) fail('Indica las notificaciones que quieres marcar como leídas.');
+      for (const id of req.body.ids) run('UPDATE notifications SET read=1 WHERE id=? AND user_id=?', id, req.user.id);
+    }
+    res.json({ unread: get('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0', req.user.id).total });
+  });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
   app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.status ? error.message : 'No fue posible completar la operación.' }));
