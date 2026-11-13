@@ -4,6 +4,8 @@ const notice = document.querySelector('#notice');
 let state = { page: 'projects', filter: 'active', query: '', projects: [], users: [], owners: [] };
 let timer;
 let boardTimer;
+let notificationTimer;
+let closeNotificationsBound = false;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const flash = message => {
   notice.textContent = message;
@@ -83,10 +85,11 @@ function render() {
   const isAdmin = state.user.role === 'Administrador';
   const active = activeProjects();
   const current = currentProject();
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}<div class="nav-group"><small>APRENDIZAJE</small></div><button data-page="training" class="${state.page === 'training' ? 'selected' : ''}"><span>✎</span> Capacitación</button>${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : state.page === 'training' ? 'Capacitación' : 'Proyectos'}</span><div class="account"><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : state.page === 'training' ? 'Capacitación en Scrum' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : state.page === 'training' ? 'Aprende el marco de trabajo y cómo usarlo en MySCruEm.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.page === 'projects' && state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
+  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}<div class="nav-group"><small>APRENDIZAJE</small></div><button data-page="training" class="${state.page === 'training' ? 'selected' : ''}"><span>✎</span> Capacitación</button>${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : state.page === 'training' ? 'Capacitación' : 'Proyectos'}</span><div class="account"><div class="notifications"><button id="bell" class="bell" aria-label="Notificaciones" aria-expanded="false">🔔<span id="bell-count" class="bell-count" hidden></span></button><div id="notification-panel" class="notification-panel" hidden></div></div><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : state.page === 'training' ? 'Capacitación en Scrum' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : state.page === 'training' ? 'Aprende el marco de trabajo y cómo usarlo en MySCruEm.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.page === 'projects' && state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
   document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => { state.page = button.dataset.page; state.query = ''; render(); });
   document.querySelectorAll('[data-nav]').forEach(button => button.onclick = () => openNav(button.dataset.nav));
   document.querySelector('#current-project')?.addEventListener('change', event => { state.currentProject = Number(event.target.value); });
+  setupNotifications();
   document.querySelector('#logout').onclick = async () => {
     try { await api('/logout', 'POST'); state = { page: 'projects', filter: 'active', query: '' }; authView(); }
     catch (error) { flash(error.message); }
@@ -118,6 +121,40 @@ async function renderTraining() {
     }
     document.querySelectorAll('[data-module]').forEach(button => button.onclick = () => { state.trainingModule = button.dataset.module; renderTraining(); });
   } catch (error) { target.innerHTML = ''; flash(error.message); }
+}
+function setupNotifications() {
+  const bell = document.querySelector('#bell');
+  const panel = document.querySelector('#notification-panel');
+  const count = document.querySelector('#bell-count');
+  const show = unread => { count.hidden = !unread; count.textContent = unread > 9 ? '9+' : String(unread); };
+  const load = async () => {
+    const data = await api('/notifications');
+    show(data.unread);
+    return data;
+  };
+  const renderPanel = async () => {
+    const data = await load();
+    panel.innerHTML = `<div class="notification-head"><strong>Notificaciones</strong>${data.unread ? '<button id="read-all" class="quiet">Marcar todas como leídas</button>' : ''}</div>${data.items.length ? data.items.map(item => `<button class="notification ${item.read ? '' : 'unread'}" data-notification="${item.id}"><small>${escape(item.kind)} · ${escape(item.project || '')} · ${escape(item.created_at.slice(0, 16).replace('T', ' '))}</small><span>${escape(item.message)}</span></button>`).join('') : '<p class="muted">No tienes notificaciones.</p>'}`;
+    panel.querySelector('#read-all')?.addEventListener('click', async event => { event.stopPropagation(); await api('/notifications/read', 'POST', { all: true }); await renderPanel(); });
+    panel.querySelectorAll('[data-notification].unread').forEach(button => button.onclick = async event => { event.stopPropagation(); await api('/notifications/read', 'POST', { ids: [Number(button.dataset.notification)] }); await renderPanel(); });
+  };
+  bell.onclick = async event => {
+    event.stopPropagation();
+    panel.hidden = !panel.hidden;
+    bell.setAttribute('aria-expanded', String(!panel.hidden));
+    if (!panel.hidden) { try { await renderPanel(); } catch (error) { flash(error.message); } }
+  };
+  panel.onclick = event => event.stopPropagation();
+  if (!closeNotificationsBound) {
+    closeNotificationsBound = true;
+    document.addEventListener('click', () => {
+      const open = document.querySelector('#notification-panel');
+      if (open) { open.hidden = true; document.querySelector('#bell')?.setAttribute('aria-expanded', 'false'); }
+    });
+  }
+  clearInterval(notificationTimer);
+  notificationTimer = setInterval(() => { if (!state.user || !document.body.contains(bell)) return clearInterval(notificationTimer); load().catch(() => clearInterval(notificationTimer)); }, 20000);
+  load().catch(() => {});
 }
 function rememberProject(id) {
   state.currentProject = Number(id);
