@@ -216,8 +216,9 @@ async function storiesDialog(project) {
     const storyCard = story => `<article class="story" data-story="${story.id}" draggable="${canCreate && !grouped}"><div class="story-toolbar"><small>HU-${story.id}</small>${canCreate && !grouped ? `<div><button class="quiet" data-move="${story.id}" data-direction="-1" aria-label="Subir ${escape(story.title)}" ${stories[0].id === story.id ? 'disabled' : ''}>↑</button><button class="quiet" data-move="${story.id}" data-direction="1" aria-label="Bajar ${escape(story.title)}" ${stories.at(-1).id === story.id ? 'disabled' : ''}>↓</button></div>` : ''}</div><div class="story-priority">${canCreate ? `<select aria-label="Prioridad de ${escape(story.title)}" data-priority="${story.id}">${['Must have','Should have','Could have','Won’t have'].map(priority => `<option ${story.priority === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select>` : badge(story.priority)}</div><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><div class="story-points"><span>Puntos de historia</span>${state.user.role === 'Developer' && !project.archived ? `<select aria-label="Puntos de ${escape(story.title)}" data-estimate="${story.id}"><option value="" disabled ${story.points == null ? 'selected' : ''}>Sin estimar</option>${[1,2,3,5,8,13,21].map(points => `<option value="${points}" ${story.points === points ? 'selected' : ''}>${points}</option>`).join('')}</select>` : `<strong>${story.points ?? 'Sin estimar'}</strong>`}</div>${epicControl(story)}<button class="quiet story-tasks" data-story-tasks="${story.id}">Ver tareas y avance</button><strong>Criterios de aceptación</strong><ul>${story.criteria.map(criterion => `<li>${escape(criterion)}</li>`).join('')}</ul></article>`;
     const groups = [...epics.map(epic => ({ title: epic.name, description: epic.description, items: stories.filter(story => story.epic_id === epic.id) })), { title: 'Sin épica', description: '', items: stories.filter(story => !story.epic_id) }].filter(group => group.items.length);
     const list = grouped ? groups.map(group => `<section class="epic-group"><div class="epic-heading"><h3>${escape(group.title)}</h3><span>${group.items.length} historias · ${group.items.reduce((sum, story) => sum + (story.points || 0), 0)} puntos</span></div>${group.description ? `<p class="muted">${escape(group.description)}</p>` : ''}<div class="story-list">${group.items.map(storyCard).join('')}</div></section>`).join('') : `<div class="story-list">${stories.map(storyCard).join('')}</div>`;
-    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'} · ${epics.length} ${epics.length === 1 ? 'épica' : 'épicas'}</p><div class="backlog-tools">${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button><button id="manage-epics" class="quiet">Épicas</button>' : ''}${epics.length ? `<label class="check"><input type="checkbox" id="group-epics" ${grouped ? 'checked' : ''}> Agrupar por épica</label>` : ''}</div>${stories.length ? list : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
+    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'} · ${epics.length} ${epics.length === 1 ? 'épica' : 'épicas'}</p><div class="backlog-tools">${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button><button id="manage-epics" class="quiet">Épicas</button>' : ''}<button id="show-dod" class="quiet">Definition of Done</button>${epics.length ? `<label class="check"><input type="checkbox" id="group-epics" ${grouped ? 'checked' : ''}> Agrupar por épica</label>` : ''}</div>${stories.length ? list : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
     document.querySelectorAll('[data-story-tasks]').forEach(button => button.onclick = () => storyTasksDialog(project, Number(button.dataset.storyTasks)));
+    document.querySelector('#show-dod').onclick = () => dodDialog(project);
     document.querySelector('#manage-epics')?.addEventListener('click', () => epicsDialog(project, epics));
     document.querySelector('#group-epics')?.addEventListener('change', event => { state.groupEpics = event.target.checked; storiesDialog(project); });
     document.querySelectorAll('[data-epic]').forEach(input => input.onchange = async () => {
@@ -277,6 +278,33 @@ async function storyTasksDialog(project, storyId) {
     modal.classList.add('wide-modal');
     document.querySelector('#back-stories').onclick = () => storiesDialog(project);
   } catch (error) { flash(error.message); }
+}
+async function dodDialog(project) {
+  try {
+    const dod = await api(`/projects/${project.id}/dod`);
+    const canEdit = !project.archived && state.user.role === 'Product Owner' && project.owner_id === state.user.id;
+    const list = dod.criteria.length ? `<ol class="dod-list">${dod.criteria.map(item => `<li>${escape(item)}</li>`).join('')}</ol><p class="muted">Actualizada por ${escape(dod.updated_by || '—')} el ${escape((dod.updated_at || '').slice(0, 10))}</p>` : '<p class="muted">El proyecto todavía no tiene Definition of Done.</p>';
+    dialog('Definition of Done', `<p class="muted">${escape(project.name)} · Criterios que debe cumplir toda historia para considerarse terminada.</p>${canEdit ? `<form><label>Criterios (uno por línea, máximo 15)<textarea name="criteria" rows="8" maxlength="3200">${escape(dod.criteria.join('\n'))}</textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver al backlog</button><button type="submit" class="primary">Guardar Definition of Done</button></div></form>` : `${list}<div class="story-actions"><button id="back-stories" class="quiet">Volver al backlog</button></div>`}`, async data => {
+      await api(`/projects/${project.id}/dod`, 'PUT', { criteria: data.criteria.split('\n').map(item => item.trim()).filter(Boolean) });
+      flash('Definition of Done guardada.');
+      await dodDialog(project);
+    });
+    document.querySelector('#back-stories').onclick = () => storiesDialog(project);
+  } catch (error) { flash(error.message); }
+}
+function doneReminder(project, task, criteria) {
+  dialog('Antes de mover a Terminado', `<p class="muted">Tarea: ${escape(task.title)}</p><p>Confirma que el trabajo cumple la Definition of Done del proyecto:</p><div class="dod-check">${criteria.map((item, index) => `<label class="check"><input type="checkbox" data-dod="${index}"> ${escape(item)}</label>`).join('')}</div><p class="form-error" role="alert"></p><div class="story-actions"><button id="cancel-done" class="quiet">Cancelar</button><button id="confirm-done" class="primary">Mover a Terminado</button></div>`);
+  document.querySelector('#cancel-done').onclick = () => boardDialog(project);
+  document.querySelector('#confirm-done').onclick = async event => {
+    if ([...modal.querySelectorAll('[data-dod]')].some(input => !input.checked)) {
+      modal.querySelector('.form-error').textContent = 'Marca todos los criterios para continuar.';
+      return;
+    }
+    event.target.disabled = true;
+    try { await api(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status: 'Terminado' }); }
+    catch (error) { flash(error.message); }
+    await boardDialog(project);
+  };
 }
 function epicsDialog(project, epics, editing) {
   dialog('Épicas del proyecto', `<p class="muted">${escape(project.name)}</p>${epics.length ? `<div class="epic-list">${epics.map(epic => `<article class="planning-story"><div><strong>${escape(epic.name)}</strong><small>${epic.stories} historias · ${epic.points} puntos${epic.description ? ` · ${escape(epic.description)}` : ''}</small></div><button class="quiet" data-edit-epic="${epic.id}">Editar</button></article>`).join('')}</div>` : '<p class="muted">Todavía no hay épicas.</p>'}<form><h3>${editing ? 'Editar épica' : 'Nueva épica'}</h3>${field('Nombre', 'name', 'text', editing?.name || '', 'maxlength="120"')}<label>Descripción<textarea name="description" maxlength="1000" rows="2" placeholder="Opcional">${escape(editing?.description || '')}</textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver al backlog</button><button type="submit" class="primary">Guardar épica</button></div></form>`, async data => {
@@ -361,7 +389,7 @@ async function planningDialog(project, sprint) {
 }
 async function boardDialog(project) {
   try {
-    const board = await api(`/projects/${project.id}/board`);
+    const [board, dod] = await Promise.all([api(`/projects/${project.id}/board`), api(`/projects/${project.id}/dod`)]);
     if (!board.sprint) {
       dialog('Tablero Kanban', `<p class="muted">${escape(project.name)}</p><section class="empty"><div class="empty-icon">▦</div><h2>No hay un sprint activo</h2><p>El tablero se habilita cuando el Scrum Master inicia un sprint.</p></section>`);
       return;
@@ -416,6 +444,10 @@ async function boardDialog(project) {
           area.classList.remove('drop-target');
           const task = board.tasks.find(item => item.id === Number(dragged?.dataset.task));
           if (!task || task.status === area.dataset.column) return;
+          if (area.dataset.column === 'Terminado' && dod.criteria.length) {
+            clearInterval(boardTimer);
+            return doneReminder(project, task, dod.criteria);
+          }
           area.querySelector('.board-cards').append(dragged);
           try { await api(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status: area.dataset.column }); }
           catch (error) { flash(error.message); }
