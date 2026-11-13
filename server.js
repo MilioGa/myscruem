@@ -83,6 +83,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
   `);
   db.exec('CREATE TABLE IF NOT EXISTS definition_of_done (project_id INTEGER PRIMARY KEY REFERENCES projects(id), criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), actor_id INTEGER REFERENCES users(id), project_id INTEGER REFERENCES projects(id), task_id INTEGER REFERENCES tasks(id), kind TEXT NOT NULL, message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS notifications_by_user ON notifications(user_id,read,id);
+  `);
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
@@ -440,6 +444,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const sprint = get("SELECT id,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     res.json({ sprintId: sprint?.id ?? null, version: sprint?.board_version ?? 0 });
   });
+  const notify = (userId, actor, projectId, taskId, kind, message) => {
+    if (!userId || userId === actor.id) return;
+    run('INSERT INTO notifications(user_id,actor_id,project_id,task_id,kind,message,created_at) VALUES (?,?,?,?,?,?,?)', userId, actor.id, projectId, taskId, kind, message, now().toISOString());
+  };
   const activeTaskFor = req => {
     const project = projectFor(req);
     if (req.user.role !== 'Developer') fail('Solo un Developer puede modificar tareas del tablero.', 403);
@@ -470,6 +478,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const id = transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', sprint.id).next;
       const created = Number(run('INSERT INTO tasks(sprint_id,story_id,title,description,assignee_id,position,label,type) VALUES (?,?,?,?,?,?,?,?)', sprint.id, story.story_id, title, description, assignee.id, position, label, type).lastInsertRowid);
+      notify(assignee.id, req.user, project.id, created, 'Asignación', `${req.user.name} te asignó la tarea "${title}" en ${project.name}.`);
       refreshStory(sprint.id, story.story_id);
       recordBurndown(sprint.id);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', sprint.id);
@@ -483,6 +492,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
       run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
+      if (task.status !== req.body.status) notify(task.assignee_id, req.user, get('SELECT project_id FROM sprints WHERE id=?', task.sprint_id).project_id, task.id, 'Cambio de estado', `${req.user.name} movió tu tarea "${task.title}" a ${req.body.status}.`);
       refreshStory(task.sprint_id, task.story_id);
       recordBurndown(task.sprint_id);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
@@ -609,6 +619,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const solution = text(req.body.solution, 'Solución', 500);
     transaction(() => {
       run("UPDATE impediments SET status='Cerrado',solution=?,closed_by=?,closed_at=? WHERE id=?", solution, req.user.id, now().toISOString(), impediment.id);
+      notify(impediment.reported_by, req.user, project.id, impediment.task_id, 'Impedimento', `${req.user.name} cerró el impedimento que registraste: ${solution}`);
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', impediment.sprint_id);
     });
     res.json({ ok: true });
