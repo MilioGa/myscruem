@@ -433,7 +433,7 @@ async function boardDialog(project) {
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
     const canMove = state.user.role === 'Developer' && !project.archived;
-    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''}" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''}" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}${task.comments || task.attachments ? `<div class="task-meta">${task.comments ? `<span>💬 ${task.comments}</span>` : ''}${task.attachments ? `<span>📎 ${task.attachments}</span>` : ''}</div>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
     const filters = state.boardFilters?.project === project.id ? state.boardFilters : { project: project.id, assignee: '', label: '', type: '' };
     state.boardFilters = filters;
     const visible = board.tasks.filter(task => (!filters.assignee || task.assignee_id === Number(filters.assignee)) && (!filters.label || task.label === filters.label) && (!filters.type || task.type === filters.type));
@@ -449,6 +449,11 @@ async function boardDialog(project) {
     };
     dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-impediments" class="quiet">Impedimentos${board.tasks.some(task => task.impediment) ? ` (${board.tasks.filter(task => task.impediment).length})` : ''}</button><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    document.querySelectorAll('[data-task]').forEach(item => item.addEventListener('click', event => {
+      if (event.target.closest('button')) return;
+      clearInterval(boardTimer);
+      taskDetail(project, board, board.tasks.find(task => task.id === Number(item.dataset.task)));
+    }));
     document.querySelectorAll('[data-impediment]').forEach(button => button.onclick = event => { event.stopPropagation(); clearInterval(boardTimer); impedimentForm(project, board.tasks.find(task => task.id === Number(button.dataset.impediment))); });
     document.querySelectorAll('[data-filter-board]').forEach(input => input.onchange = () => { filters[input.dataset.filterBoard] = input.value; boardDialog(project); });
     document.querySelector('#clear-filters').onclick = () => { Object.assign(filters, { assignee: '', label: '', type: '' }); boardDialog(project); };
@@ -510,6 +515,41 @@ async function impedimentsDialog(project, from = 'nav', status = 'Abierto') {
         flash('Impedimento cerrado.');
       } catch (error) { flash(error.message); }
       await impedimentsDialog(project, from, status);
+    });
+  } catch (error) { flash(error.message); }
+}
+async function taskDetail(project, board, task) {
+  try {
+    const base = `/projects/${project.id}/tasks/${task.id}`;
+    const data = await api(`${base}/comments`);
+    const story = board.stories.find(item => item.id === task.story_id);
+    const size = bytes => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    const writable = !project.archived;
+    dialog(task.title, `<div class="task-detail-meta">${badge(task.status, task.status === 'Terminado' ? 'green' : '')}<span class="chip">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}<span class="muted">HU-${task.story_id} · ${escape(story?.title || '')} · Responsable: ${escape(task.assignee)}</span></div>${task.description ? `<p>${escape(task.description)}</p>` : ''}${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : ''}<h3>Archivos adjuntos</h3>${data.attachments.length ? `<div class="attachment-list">${data.attachments.map(file => `<div class="attachment"><a href="/api${base}/attachments/${file.id}" download>📎 ${escape(file.filename)}</a><small>${size(file.size)} · ${escape(file.author)} · ${escape(file.created_at.slice(0, 10))}</small>${file.user_id === state.user.id && writable ? `<button class="quiet" data-delete-file="${file.id}">Eliminar</button>` : ''}</div>`).join('')}</div>` : '<p class="muted">Sin archivos adjuntos.</p>'}${writable ? '<label class="upload">Adjuntar archivo (PDF, imagen, texto u Office, máximo 5 MB)<input type="file" id="attach-file" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.csv,.docx,.xlsx,.pptx"></label>' : ''}<h3>Comentarios</h3>${data.comments.length ? `<div class="comment-list">${data.comments.map(comment => `<article class="comment"><div class="card-top"><strong>${escape(comment.author)}</strong><small class="muted">${escape(comment.created_at.slice(0, 16).replace('T', ' '))}</small></div><p>${escape(comment.body)}</p>${comment.user_id === state.user.id && writable ? `<button class="quiet" data-delete-comment="${comment.id}">Eliminar</button>` : ''}</article>`).join('')}</div>` : '<p class="muted">Todavía no hay comentarios.</p>'}${writable ? '<form><label>Nuevo comentario<textarea name="body" required maxlength="1000" rows="3" placeholder="Escribe un comentario para el equipo"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver al tablero</button><button type="submit" class="primary">Comentar</button></div></form>' : '<div class="story-actions"><button id="back-board" class="quiet">Volver al tablero</button></div>'}`, async form => {
+      await api(`${base}/comments`, 'POST', form);
+      await taskDetail(project, board, task);
+    });
+    modal.classList.add('wide-modal');
+    document.querySelector('#back-board').onclick = () => boardDialog(project);
+    document.querySelectorAll('[data-delete-comment]').forEach(button => button.onclick = async () => {
+      try { await api(`${base}/comments/${button.dataset.deleteComment}`, 'DELETE'); await taskDetail(project, board, task); } catch (error) { flash(error.message); }
+    });
+    document.querySelectorAll('[data-delete-file]').forEach(button => button.onclick = async () => {
+      try { await api(`${base}/attachments/${button.dataset.deleteFile}`, 'DELETE'); await taskDetail(project, board, task); } catch (error) { flash(error.message); }
+    });
+    document.querySelector('#attach-file')?.addEventListener('change', event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { flash('El archivo supera el límite de 5 MB.'); event.target.value = ''; return; }
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          await api(`${base}/attachments`, 'POST', { filename: file.name, data: String(reader.result).split(',')[1] || '' });
+          flash('Archivo adjuntado.');
+          await taskDetail(project, board, task);
+        } catch (error) { flash(error.message); }
+      };
+      reader.readAsDataURL(file);
     });
   } catch (error) { flash(error.message); }
 }
