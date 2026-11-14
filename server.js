@@ -87,6 +87,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), actor_id INTEGER REFERENCES users(id), project_id INTEGER REFERENCES projects(id), task_id INTEGER REFERENCES tasks(id), kind TEXT NOT NULL, message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS notifications_by_user ON notifications(user_id,read,id);
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_comments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS task_attachments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+  `);
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
@@ -97,7 +101,9 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
-  app.use(express.json({ limit: '20kb' }));
+  const smallJson = express.json({ limit: '20kb' });
+  const uploadJson = express.json({ limit: '8mb' });
+  app.use((req, res, next) => (req.method === 'POST' && /^\/api\/projects\/\d+\/tasks\/\d+\/attachments$/.test(req.path) ? uploadJson : smallJson)(req, res, next));
   const get = (sql, ...params) => db.prepare(sql).get(...params);
   const all = (sql, ...params) => db.prepare(sql).all(...params);
   const run = (sql, ...params) => db.prepare(sql).run(...params);
@@ -440,7 +446,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (req.query.assignee) { filters.push('tasks.assignee_id=?'); values.push(Number(req.query.assignee) || 0); }
     if (req.query.label) { filters.push('tasks.label=?'); values.push(String(req.query.label)); }
     if (req.query.type) { filters.push('tasks.type=?'); values.push(String(req.query.type)); }
-    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type,impediments.id AS impediment_id,impediments.description AS impediment FROM tasks JOIN users ON users.id=tasks.assignee_id LEFT JOIN impediments ON impediments.task_id=tasks.id AND impediments.status='Abierto' WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
+    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type,(SELECT COUNT(*) FROM task_comments WHERE task_comments.task_id=tasks.id) AS comments,(SELECT COUNT(*) FROM task_attachments WHERE task_attachments.task_id=tasks.id) AS attachments,impediments.id AS impediment_id,impediments.description AS impediment FROM tasks JOIN users ON users.id=tasks.assignee_id LEFT JOIN impediments ON impediments.task_id=tasks.id AND impediments.status='Abierto' WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
     const labels = all("SELECT DISTINCT label FROM tasks WHERE sprint_id=? AND label<>'' ORDER BY label", sprint.id).map(row => row.label);
     const members = assignable(project);
     res.json({ sprint, columns, stories, tasks, members, types: taskTypes, labels });
@@ -673,6 +679,61 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       for (const id of req.body.ids) run('UPDATE notifications SET read=1 WHERE id=? AND user_id=?', id, req.user.id);
     }
     res.json({ unread: get('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0', req.user.id).total });
+  });
+  const allowedFiles = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', txt: 'text/plain', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  const taskFor = (req, write = false) => {
+    const project = projectFor(req);
+    if (write && project.archived) fail('El proyecto está archivado.');
+    const task = get('SELECT tasks.* FROM tasks JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.id=? AND sprints.project_id=?', Number(req.params.taskId) || 0, project.id);
+    if (!task) fail('Tarea no encontrada.', 404);
+    return { project, task };
+  };
+  app.get('/api/projects/:id/tasks/:taskId/comments', auth, (req, res) => {
+    const { task } = taskFor(req);
+    res.json({
+      comments: all('SELECT task_comments.id,task_comments.body,task_comments.user_id,task_comments.created_at,users.name AS author FROM task_comments JOIN users ON users.id=task_comments.user_id WHERE task_id=? ORDER BY task_comments.id', task.id),
+      attachments: all('SELECT task_attachments.id,task_attachments.filename,task_attachments.mime,task_attachments.size,task_attachments.user_id,task_attachments.created_at,users.name AS author FROM task_attachments JOIN users ON users.id=task_attachments.user_id WHERE task_id=? ORDER BY task_attachments.id', task.id)
+    });
+  });
+  app.post('/api/projects/:id/tasks/:taskId/comments', auth, (req, res) => {
+    const { task } = taskFor(req, true);
+    const body = text(req.body.body, 'Comentario', 1000);
+    res.status(201).json({ id: Number(run('INSERT INTO task_comments(task_id,user_id,body,created_at) VALUES (?,?,?,?)', task.id, req.user.id, body, now().toISOString()).lastInsertRowid) });
+  });
+  app.delete('/api/projects/:id/tasks/:taskId/comments/:commentId', auth, (req, res) => {
+    const { task } = taskFor(req, true);
+    const comment = get('SELECT * FROM task_comments WHERE id=? AND task_id=?', Number(req.params.commentId) || 0, task.id);
+    if (!comment) fail('Comentario no encontrado.', 404);
+    if (comment.user_id !== req.user.id) fail('Solo el autor puede eliminar su comentario.', 403);
+    run('DELETE FROM task_comments WHERE id=?', comment.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/tasks/:taskId/attachments', auth, (req, res) => {
+    const { task } = taskFor(req, true);
+    const filename = text(req.body.filename, 'Nombre del archivo', 150).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
+    const extension = filename.split('.').pop().toLowerCase();
+    const mime = allowedFiles[extension];
+    if (!mime || filename.indexOf('.') < 1) fail('Tipo de archivo no permitido. Usa PDF, imagen, texto o documentos de Office.');
+    if (typeof req.body.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(req.body.data)) fail('El archivo no es válido.');
+    const data = Buffer.from(req.body.data, 'base64');
+    if (!data.length) fail('El archivo está vacío.');
+    if (data.length > 5 * 1024 * 1024) fail('El archivo supera el límite de 5 MB.');
+    res.status(201).json({ id: Number(run('INSERT INTO task_attachments(task_id,user_id,filename,mime,size,data,created_at) VALUES (?,?,?,?,?,?,?)', task.id, req.user.id, filename, mime, data.length, data, now().toISOString()).lastInsertRowid) });
+  });
+  app.get('/api/projects/:id/tasks/:taskId/attachments/:attachmentId', auth, (req, res) => {
+    const { task } = taskFor(req);
+    const file = get('SELECT * FROM task_attachments WHERE id=? AND task_id=?', Number(req.params.attachmentId) || 0, task.id);
+    if (!file) fail('Archivo no encontrado.', 404);
+    res.set({ 'Content-Type': file.mime, 'Content-Length': String(file.size), 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`, 'Cache-Control': 'private, no-store' });
+    res.end(Buffer.from(file.data));
+  });
+  app.delete('/api/projects/:id/tasks/:taskId/attachments/:attachmentId', auth, (req, res) => {
+    const { task } = taskFor(req, true);
+    const file = get('SELECT id,user_id FROM task_attachments WHERE id=? AND task_id=?', Number(req.params.attachmentId) || 0, task.id);
+    if (!file) fail('Archivo no encontrado.', 404);
+    if (file.user_id !== req.user.id) fail('Solo el autor puede eliminar su archivo.', 403);
+    run('DELETE FROM task_attachments WHERE id=?', file.id);
+    res.json({ ok: true });
   });
   app.use(express.static(join(root, 'public')));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
