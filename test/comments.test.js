@@ -1,0 +1,50 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { setup } from './support.js';
+
+test('Comentarios y archivos adjuntos en las tareas', async () => {
+  const f = await setup();
+  try {
+    const developerId = (await f.admin('/users')).find(user => user.name === 'developer').id;
+    const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 3 });
+    const sprints = `/projects/${f.project.id}/sprints`;
+    const sprint = await f.master(sprints, 'POST', { name: 'Sprint 5', startDate: '2026-11-11', endDate: '2026-11-17', goal: 'Colaboración' }, 201);
+    await f.developer(`${sprints}/${sprint.id}/stories`, 'POST', { storyId: story.id }, 201);
+    await f.master(`${sprints}/${sprint.id}/start`, 'POST');
+    const task = await f.developer(`/projects/${f.project.id}/tasks`, 'POST', { title: 'Diseño de correo', storyId: story.id, assigneeId: developerId }, 201);
+    const base = `/projects/${f.project.id}/tasks/${task.id}`;
+    await f.developer(`${base}/comments`, 'POST', { body: '' }, 400);
+    await f.developer(`${base}/comments`, 'POST', { body: 'x'.repeat(1001) }, 400);
+    await f.outside(`${base}/comments`, 'POST', { body: 'Hola' }, 404);
+    const mine = await f.developer(`${base}/comments`, 'POST', { body: 'Subí la propuesta de diseño.' }, 201);
+    await f.owner(`${base}/comments`, 'POST', { body: 'Se ve bien, agreguen el logo.' }, 201);
+    const content = Buffer.from('Propuesta de diseño del correo').toString('base64');
+    await f.developer(`${base}/attachments`, 'POST', { filename: 'virus.exe', data: content }, 400);
+    await f.developer(`${base}/attachments`, 'POST', { filename: 'notas.txt', data: '***' }, 400);
+    await f.developer(`${base}/attachments`, 'POST', { filename: 'vacio.txt', data: '' }, 400);
+    await f.developer(`${base}/attachments`, 'POST', { filename: 'grande.pdf', data: Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64') }, 400);
+    const file = await f.developer(`${base}/attachments`, 'POST', { filename: 'propuesta.txt', data: content }, 201);
+    let detail = await f.master(`${base}/comments`);
+    assert.deepEqual(detail.comments.map(comment => [comment.author, comment.body]), [['developer', 'Subí la propuesta de diseño.'], ['owner', 'Se ve bien, agreguen el logo.']]);
+    assert.deepEqual(detail.attachments.map(item => [item.filename, item.mime, item.size, item.author]), [['propuesta.txt', 'text/plain', 31, 'developer']]);
+    const board = await f.owner(`/projects/${f.project.id}/board`);
+    assert.deepEqual([board.tasks[0].comments, board.tasks[0].attachments], [2, 1]);
+    const download = await f.master.raw(`${base}/attachments/${file.id}`);
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get('content-disposition'), /^attachment; filename\*=UTF-8''propuesta\.txt$/);
+    assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(await download.text(), 'Propuesta de diseño del correo');
+    assert.equal((await f.outside.raw(`${base}/attachments/${file.id}`)).status, 404);
+    await f.owner(`${base}/comments/${mine.id}`, 'DELETE', undefined, 403);
+    await f.owner(`${base}/attachments/${file.id}`, 'DELETE', undefined, 403);
+    await f.developer(`${base}/comments/${mine.id}`, 'DELETE');
+    await f.developer(`${base}/attachments/${file.id}`, 'DELETE');
+    await f.developer(`${base}/comments/${mine.id}`, 'DELETE', undefined, 404);
+    detail = await f.developer(`${base}/comments`);
+    assert.deepEqual([detail.comments.length, detail.attachments.length], [1, 0]);
+    const big = await f.developer(`${base}/attachments`, 'POST', { filename: 'imagen.png', data: Buffer.alloc(3 * 1024 * 1024).toString('base64') }, 201);
+    assert.ok(big.id);
+    await f.developer(`/projects/${f.project.id}/tasks/99999/comments`, 'GET', undefined, 404);
+  } finally { await f.close(); }
+});

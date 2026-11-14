@@ -9,7 +9,7 @@ export async function setup(options = {}) {
   const client = () => {
     let cookie = '';
     let csrf = '';
-    return async (path, method = 'GET', body, status = 200, csrfOverride) => {
+    const request = async (path, method = 'GET', body, status = 200, csrfOverride) => {
       const res = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', Cookie: cookie, 'X-CSRF-Token': csrfOverride ?? csrf }, body: body === undefined ? undefined : JSON.stringify(body) });
       if (res.headers.get('set-cookie')) cookie = res.headers.get('set-cookie').split(';')[0];
       const data = await res.json();
@@ -17,6 +17,8 @@ export async function setup(options = {}) {
       if (data.csrf) csrf = data.csrf;
       return data;
     };
+    request.raw = (path, options = {}) => fetch(base + path, { ...options, headers: { ...options.headers, Cookie: cookie, 'X-CSRF-Token': csrf } });
+    return request;
   };
   const admin = client();
   const outside = client();
