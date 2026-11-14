@@ -424,6 +424,12 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       ? all("SELECT users.id,users.name FROM team_members JOIN users ON users.id=team_members.user_id WHERE team_members.team_id=? AND users.status='Activo' AND users.role='Developer' ORDER BY users.name", team.id)
       : all("SELECT id,name FROM users WHERE company_id=? AND status='Activo' AND role='Developer' ORDER BY name", project.company_id);
   };
+  app.get('/api/projects/:id/velocity', auth, (req, res) => {
+    const project = projectFor(req);
+    const sprints = all("SELECT id,name,start_date,end_date,COALESCE(committed_points,0) AS committed,COALESCE(completed_points,0) AS completed FROM sprints WHERE project_id=? AND status='Cerrado' ORDER BY start_date,id", project.id);
+    const average = sprints.length ? Math.round(sprints.reduce((sum, sprint) => sum + sprint.completed, 0) * 10 / sprints.length) / 10 : 0;
+    res.json({ sprints, average });
+  });
   app.get('/api/projects/:id/board', auth, (req, res) => {
     const project = projectFor(req);
     const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
