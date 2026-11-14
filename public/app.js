@@ -433,7 +433,7 @@ async function boardDialog(project) {
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
     const canMove = state.user.role === 'Developer' && !project.archived;
-    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''}" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''}" data-task="${task.id}" draggable="${canMove}"><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}${task.comments || task.attachments ? `<div class="task-meta">${task.comments ? `<span>💬 ${task.comments}</span>` : ''}${task.attachments ? `<span>📎 ${task.attachments}</span>` : ''}</div>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
     const filters = state.boardFilters?.project === project.id ? state.boardFilters : { project: project.id, assignee: '', label: '', type: '' };
     state.boardFilters = filters;
     const visible = board.tasks.filter(task => (!filters.assignee || task.assignee_id === Number(filters.assignee)) && (!filters.label || task.label === filters.label) && (!filters.type || task.type === filters.type));
@@ -449,6 +449,11 @@ async function boardDialog(project) {
     };
     dialog('Tablero Kanban', `<div class="board-heading"><div><p class="muted">${escape(project.name)} · ${escape(board.sprint.name)} · Del ${escape(board.sprint.start_date)} al ${escape(board.sprint.end_date)}</p><p class="project-description"><strong>Meta:</strong> ${escape(board.sprint.goal)}</p></div><div class="board-tools"><button id="board-impediments" class="quiet">Impedimentos${board.tasks.some(task => task.impediment) ? ` (${board.tasks.filter(task => task.impediment).length})` : ''}</button><button id="board-metrics" class="quiet">Métricas</button>${canMove ? '<button id="new-task" class="primary">+ Nueva tarea</button>' : ''}</div></div>${filterBar}<div class="board">${board.columns.map(column).join('')}</div><p class="muted">${board.tasks.length} tareas · ${board.sprint.committed_points ?? 0} puntos comprometidos</p>`);
     modal.classList.add('board-modal');
+    document.querySelectorAll('[data-task]').forEach(item => item.addEventListener('click', event => {
+      if (event.target.closest('button')) return;
+      clearInterval(boardTimer);
+      taskDetail(project, board, board.tasks.find(task => task.id === Number(item.dataset.task)));
+    }));
     document.querySelectorAll('[data-impediment]').forEach(button => button.onclick = event => { event.stopPropagation(); clearInterval(boardTimer); impedimentForm(project, board.tasks.find(task => task.id === Number(button.dataset.impediment))); });
     document.querySelectorAll('[data-filter-board]').forEach(input => input.onchange = () => { filters[input.dataset.filterBoard] = input.value; boardDialog(project); });
     document.querySelector('#clear-filters').onclick = () => { Object.assign(filters, { assignee: '', label: '', type: '' }); boardDialog(project); };
@@ -513,6 +518,41 @@ async function impedimentsDialog(project, from = 'nav', status = 'Abierto') {
     });
   } catch (error) { flash(error.message); }
 }
+async function taskDetail(project, board, task) {
+  try {
+    const base = `/projects/${project.id}/tasks/${task.id}`;
+    const data = await api(`${base}/comments`);
+    const story = board.stories.find(item => item.id === task.story_id);
+    const size = bytes => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    const writable = !project.archived;
+    dialog(task.title, `<div class="task-detail-meta">${badge(task.status, task.status === 'Terminado' ? 'green' : '')}<span class="chip">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}<span class="muted">HU-${task.story_id} · ${escape(story?.title || '')} · Responsable: ${escape(task.assignee)}</span></div>${task.description ? `<p>${escape(task.description)}</p>` : ''}${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}</p>` : ''}<h3>Archivos adjuntos</h3>${data.attachments.length ? `<div class="attachment-list">${data.attachments.map(file => `<div class="attachment"><a href="/api${base}/attachments/${file.id}" download>📎 ${escape(file.filename)}</a><small>${size(file.size)} · ${escape(file.author)} · ${escape(file.created_at.slice(0, 10))}</small>${file.user_id === state.user.id && writable ? `<button class="quiet" data-delete-file="${file.id}">Eliminar</button>` : ''}</div>`).join('')}</div>` : '<p class="muted">Sin archivos adjuntos.</p>'}${writable ? '<label class="upload">Adjuntar archivo (PDF, imagen, texto u Office, máximo 5 MB)<input type="file" id="attach-file" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.csv,.docx,.xlsx,.pptx"></label>' : ''}<h3>Comentarios</h3>${data.comments.length ? `<div class="comment-list">${data.comments.map(comment => `<article class="comment"><div class="card-top"><strong>${escape(comment.author)}</strong><small class="muted">${escape(comment.created_at.slice(0, 16).replace('T', ' '))}</small></div><p>${escape(comment.body)}</p>${comment.user_id === state.user.id && writable ? `<button class="quiet" data-delete-comment="${comment.id}">Eliminar</button>` : ''}</article>`).join('')}</div>` : '<p class="muted">Todavía no hay comentarios.</p>'}${writable ? '<form><label>Nuevo comentario<textarea name="body" required maxlength="1000" rows="3" placeholder="Escribe un comentario para el equipo"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver al tablero</button><button type="submit" class="primary">Comentar</button></div></form>' : '<div class="story-actions"><button id="back-board" class="quiet">Volver al tablero</button></div>'}`, async form => {
+      await api(`${base}/comments`, 'POST', form);
+      await taskDetail(project, board, task);
+    });
+    modal.classList.add('wide-modal');
+    document.querySelector('#back-board').onclick = () => boardDialog(project);
+    document.querySelectorAll('[data-delete-comment]').forEach(button => button.onclick = async () => {
+      try { await api(`${base}/comments/${button.dataset.deleteComment}`, 'DELETE'); await taskDetail(project, board, task); } catch (error) { flash(error.message); }
+    });
+    document.querySelectorAll('[data-delete-file]').forEach(button => button.onclick = async () => {
+      try { await api(`${base}/attachments/${button.dataset.deleteFile}`, 'DELETE'); await taskDetail(project, board, task); } catch (error) { flash(error.message); }
+    });
+    document.querySelector('#attach-file')?.addEventListener('change', event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { flash('El archivo supera el límite de 5 MB.'); event.target.value = ''; return; }
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          await api(`${base}/attachments`, 'POST', { filename: file.name, data: String(reader.result).split(',')[1] || '' });
+          flash('Archivo adjuntado.');
+          await taskDetail(project, board, task);
+        } catch (error) { flash(error.message); }
+      };
+      reader.readAsDataURL(file);
+    });
+  } catch (error) { flash(error.message); }
+}
 function impedimentForm(project, task) {
   dialog('Registrar impedimento', `<form><p class="muted">Tarea: ${escape(task.title)}</p><label>¿Qué impide avanzar?<textarea name="description" required maxlength="500" rows="4" placeholder="Describe el bloqueo y lo que necesitas para resolverlo"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver</button><button type="submit" class="primary">Registrar impedimento</button></div></form>`, async data => {
     await api(`/projects/${project.id}/tasks/${task.id}/impediments`, 'POST', data);
@@ -539,10 +579,19 @@ function burndownChart(data) {
   const line = key => data.days.map((day, index) => day[key] === null ? null : `${x(index)},${y(day[key])}`).filter(Boolean).join(' ');
   return `<svg class="burndown-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Gráfico Burndown">${ticks.map(tick => `<line x1="${left}" x2="${width - right}" y1="${y(tick)}" y2="${y(tick)}" class="grid"/><text x="${left - 10}" y="${y(tick) + 4}" text-anchor="end">${tick}</text>`).join('')}${data.days.map((day, index) => `<text x="${x(index)}" y="${height - 14}" text-anchor="middle">${escape(day.date.slice(8))}/${escape(day.date.slice(5, 7))}</text>`).join('')}<polyline points="${line('ideal')}" class="ideal"/><polyline points="${line('remaining')}" class="real"/>${data.days.map((day, index) => day.remaining === null ? '' : `<circle cx="${x(index)}" cy="${y(day.remaining)}" r="4" class="real-point"><title>${escape(day.date)}: ${day.remaining} puntos</title></circle>`).join('')}</svg>`;
 }
+function velocityChart(data) {
+  const width = 820, height = 280, left = 46, right = 20, top = 16, bottom = 44;
+  const max = Math.max(...data.sprints.map(sprint => Math.max(sprint.committed, sprint.completed)), 1);
+  const slot = (width - left - right) / data.sprints.length;
+  const bar = Math.min(34, slot / 3);
+  const y = value => top + (height - top - bottom) * (1 - value / max);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(step => Math.round(max * step));
+  return `<svg class="burndown-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Gráfica de velocidad">${ticks.map(tick => `<line x1="${left}" x2="${width - right}" y1="${y(tick)}" y2="${y(tick)}" class="grid"/><text x="${left - 10}" y="${y(tick) + 4}" text-anchor="end">${tick}</text>`).join('')}${data.sprints.map((sprint, index) => { const center = left + slot * index + slot / 2; return `<rect x="${center - bar - 2}" y="${y(sprint.committed)}" width="${bar}" height="${y(0) - y(sprint.committed)}" class="bar-committed"><title>${escape(sprint.name)}: ${sprint.committed} comprometidos</title></rect><rect x="${center + 2}" y="${y(sprint.completed)}" width="${bar}" height="${y(0) - y(sprint.completed)}" class="bar-completed"><title>${escape(sprint.name)}: ${sprint.completed} completados</title></rect><text x="${center + bar / 2 + 2}" y="${y(sprint.completed) - 6}" text-anchor="middle" class="bar-value">${sprint.completed}</text><text x="${center}" y="${height - 16}" text-anchor="middle">${escape(sprint.name)}</text>`; }).join('')}<line x1="${left}" x2="${width - right}" y1="${y(data.average)}" y2="${y(data.average)}" class="average"/></svg>`;
+}
 async function burndownDialog(project, sprintId, from = 'sprints') {
   try {
-    const data = await api(`/projects/${project.id}/sprints/${sprintId}/burndown`);
-    dialog('Métricas del sprint', `<p class="muted">${escape(project.name)} · ${escape(data.sprint.name)} · ${escape(data.sprint.status)}</p><div class="metric-cards"><div><small>Puntos comprometidos</small><strong>${data.committed}</strong></div><div><small>Puntos completados</small><strong>${data.completed}</strong></div><div><small>Puntos restantes</small><strong>${data.remaining}</strong></div></div><section class="burndown"><div class="burndown-heading"><h3>Gráfico Burndown</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Puntos restantes</div></div>${!data.committed ? '<section class="empty"><h2>Sin datos para graficar</h2><p>Selecciona historias estimadas para el sprint.</p></section>' : burndownChart(data)}${data.sprint.status === 'En planificación' && data.committed ? '<p class="muted">El sprint aún no inicia. La línea de puntos restantes aparecerá al iniciarlo.</p>' : ''}</section><div class="story-actions"><button id="back-metrics" class="quiet">${from === 'board' ? 'Volver al tablero' : 'Volver a sprints'}</button></div>`);
+    const [data, velocity] = await Promise.all([api(`/projects/${project.id}/sprints/${sprintId}/burndown`), api(`/projects/${project.id}/velocity`)]);
+    dialog('Métricas del sprint', `<p class="muted">${escape(project.name)} · ${escape(data.sprint.name)} · ${escape(data.sprint.status)}</p><div class="metric-cards"><div><small>Puntos comprometidos</small><strong>${data.committed}</strong></div><div><small>Puntos completados</small><strong>${data.completed}</strong></div><div><small>Puntos restantes</small><strong>${data.remaining}</strong></div></div><section class="burndown"><div class="burndown-heading"><h3>Gráfico Burndown</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Puntos restantes</div></div>${!data.committed ? '<section class="empty"><h2>Sin datos para graficar</h2><p>Selecciona historias estimadas para el sprint.</p></section>' : burndownChart(data)}${data.sprint.status === 'En planificación' && data.committed ? '<p class="muted">El sprint aún no inicia. La línea de puntos restantes aparecerá al iniciarlo.</p>' : ''}</section><section class="burndown velocity"><div class="burndown-heading"><h3>Velocidad del equipo</h3><div class="legend"><span class="legend-committed"></span>Comprometidos<span class="legend-completed"></span>Completados</div></div>${velocity.sprints.length ? `${velocityChart(velocity)}<p class="muted">Promedio de velocidad: <strong>${velocity.average}</strong> puntos por sprint en ${velocity.sprints.length} ${velocity.sprints.length === 1 ? 'sprint cerrado' : 'sprints cerrados'}.</p>` : '<section class="empty"><h2>Aún no hay datos de velocidad</h2><p>La velocidad se calcula con los sprints cerrados del proyecto.</p></section>'}</section><div class="story-actions"><button id="back-metrics" class="quiet">${from === 'board' ? 'Volver al tablero' : 'Volver a sprints'}</button></div>`);
     modal.classList.add('board-modal');
     document.querySelector('#back-metrics').onclick = () => { clearInterval(boardTimer); return from === 'board' ? boardDialog(project) : sprintsDialog(project); };
     clearInterval(boardTimer);
