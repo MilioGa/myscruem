@@ -363,9 +363,10 @@ function storyForm(project) {
 async function sprintsDialog(project) {
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
-    dialog('Sprints del proyecto', `<p class="muted">${escape(project.name)}</p>${state.user.role === 'Scrum Master' && !project.archived ? '<button id="new-sprint" class="primary">+ Nuevo sprint</button>' : ''}${sprints.length ? `<div class="story-list">${sprints.map(sprint => `<article class="story"><h3>${escape(sprint.name)}</h3>${badge(sprint.status)}<p>${escape(sprint.start_date)} al ${escape(sprint.end_date)}</p><p class="project-description">${escape(sprint.goal)}</p>${sprint.status === 'Cerrado' ? `<p class="muted">Completados ${sprint.completed_points ?? 0} de ${sprint.committed_points ?? 0} puntos</p>` : ''}<div class="sprint-actions"><button class="quiet" data-metrics="${sprint.id}">Métricas</button><button class="quiet" data-plan="${sprint.id}">${state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación' ? 'Planificar' : 'Ver historias'}</button>${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'En planificación' ? `<button class="primary" data-start="${sprint.id}">Iniciar sprint</button>` : ''}${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'Activo' ? `<button class="primary" data-close="${sprint.id}">Cerrar sprint</button>` : ''}</div></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene sprints.</p>'}`);
+    dialog('Sprints del proyecto', `<p class="muted">${escape(project.name)}</p>${state.user.role === 'Scrum Master' && !project.archived ? '<button id="new-sprint" class="primary">+ Nuevo sprint</button>' : ''}${sprints.length ? `<div class="story-list">${sprints.map(sprint => `<article class="story"><h3>${escape(sprint.name)}</h3>${badge(sprint.status)}<p>${escape(sprint.start_date)} al ${escape(sprint.end_date)}</p><p class="project-description">${escape(sprint.goal)}</p>${sprint.status === 'Cerrado' ? `<p class="muted">Completados ${sprint.completed_points ?? 0} de ${sprint.committed_points ?? 0} puntos</p>` : ''}<div class="sprint-actions"><button class="quiet" data-metrics="${sprint.id}">Métricas</button><button class="quiet" data-meetings="${sprint.id}">Actas</button><button class="quiet" data-plan="${sprint.id}">${state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación' ? 'Planificar' : 'Ver historias'}</button>${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'En planificación' ? `<button class="primary" data-start="${sprint.id}">Iniciar sprint</button>` : ''}${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'Activo' ? `<button class="primary" data-close="${sprint.id}">Cerrar sprint</button>` : ''}</div></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene sprints.</p>'}`);
     document.querySelector('#new-sprint')?.addEventListener('click', () => sprintForm(project));
     document.querySelectorAll('[data-plan]').forEach(button => button.onclick = () => planningDialog(project, sprints.find(sprint => sprint.id === Number(button.dataset.plan))));
+    document.querySelectorAll('[data-meetings]').forEach(button => button.onclick = () => meetingsDialog(project, sprints.find(sprint => sprint.id === Number(button.dataset.meetings))));
     document.querySelectorAll('[data-metrics]').forEach(button => button.onclick = () => burndownDialog(project, Number(button.dataset.metrics), 'sprints'));
     document.querySelectorAll('[data-start]').forEach(button => button.onclick = async () => {
       button.disabled = true;
@@ -393,6 +394,27 @@ async function closeDialog(project, sprint) {
       } catch (error) { flash(error.message); }
       await sprintsDialog(project);
     };
+  } catch (error) { flash(error.message); }
+}
+async function meetingsDialog(project, sprint) {
+  try {
+    const meetings = await api(`/projects/${project.id}/sprints/${sprint.id}/meetings`);
+    const canEdit = state.user.role === 'Scrum Master' && !project.archived;
+    const today = new Date().toLocaleDateString('en-CA');
+    const list = meetings.length ? meetings.map(meeting => `<article class="meeting"><div class="card-top"><div>${badge(meeting.type, meeting.type === 'Retrospectiva' ? 'green' : '')} <strong>${escape(meeting.date)}</strong></div><small class="muted">Registró ${escape(meeting.author)}</small></div>${meeting.attendees ? `<p class="muted">Asistentes: ${escape(meeting.attendees)}</p>` : ''}<p class="meeting-notes">${escape(meeting.notes)}</p>${meeting.agreements.length ? `<strong>Acuerdos</strong><div class="agreements">${meeting.agreements.map(item => `<label class="check ${item.done ? 'done' : ''}"><input type="checkbox" data-agreement="${item.id}" ${item.done ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> ${escape(item.text)}${item.done ? ` <small>(atendido por ${escape(item.done_by)}, ${escape(item.done_at.slice(0, 10))})</small>` : ''}</label>`).join('')}</div>` : ''}</article>`).join('') : '<p class="muted">Todavía no hay actas registradas para este sprint.</p>';
+    dialog(`Actas · ${sprint.name}`, `<p class="muted">${escape(project.name)} · Daily, Revisión y Retrospectiva</p><div class="meeting-list">${list}</div>${canEdit ? `<form class="meeting-form"><h3>Nueva acta</h3><div class="form-row"><label>Evento<select name="type"><option>Daily</option><option>Revisión</option><option>Retrospectiva</option></select></label>${field('Fecha', 'date', 'date', today)}</div><label>Asistentes<input name="attendees" maxlength="500" placeholder="Opcional, por ejemplo: todo el equipo"></label><label>Notas<textarea name="notes" required maxlength="3000" rows="4" placeholder="Temas tratados, avances y bloqueos"></textarea></label><label>Acuerdos (uno por línea)<textarea name="agreements" maxlength="6000" rows="3" placeholder="Opcional"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-sprint-list" class="quiet">Volver a sprints</button><button type="submit" class="primary">Guardar acta</button></div></form>` : '<div class="story-actions"><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>'}`, async data => {
+      await api(`/projects/${project.id}/sprints/${sprint.id}/meetings`, 'POST', { ...data, agreements: data.agreements.split('\n').map(item => item.trim()).filter(Boolean) });
+      flash('Acta registrada.');
+      await meetingsDialog(project, sprint);
+    });
+    modal.classList.add('wide-modal');
+    document.querySelector('#back-sprint-list').onclick = () => sprintsDialog(project);
+    document.querySelectorAll('[data-agreement]').forEach(input => input.onchange = async () => {
+      input.disabled = true;
+      try { await api(`/projects/${project.id}/agreements/${input.dataset.agreement}`, 'PATCH', { done: input.checked }); }
+      catch (error) { flash(error.message); }
+      await meetingsDialog(project, sprint);
+    });
   } catch (error) { flash(error.message); }
 }
 function sprintForm(project) {
