@@ -48,3 +48,23 @@ test('Impedimentos: registro, resaltado en el tablero, lista y cierre por el Scr
     await f.outside(list, 'GET', undefined, 404);
   } finally { await f.close(); }
 });
+
+test('Una tarea con impedimento abierto no se puede mover hasta resolverlo', async () => {
+  const f = await setup();
+  try {
+    const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 3 });
+    const sprints = `/projects/${f.project.id}/sprints`;
+    const sprint = await f.master(sprints, 'POST', { name: 'Sprint 5', startDate: '2026-11-11', endDate: '2026-11-17', goal: 'Bloqueos' }, 201);
+    await f.developer(`${sprints}/${sprint.id}/stories`, 'POST', { storyId: story.id }, 201);
+    await f.master(`${sprints}/${sprint.id}/start`, 'POST');
+    const developerId = (await f.admin('/users')).find(user => user.name === 'developer').id;
+    const tasks = `/projects/${f.project.id}/tasks`;
+    const task = await f.developer(tasks, 'POST', { title: 'Avisos', storyId: story.id, assigneeId: developerId }, 201);
+    const impediment = await f.developer(`${tasks}/${task.id}/impediments`, 'POST', { description: 'Sin buzón de prueba' }, 201);
+    await f.developer(`${tasks}/${task.id}/status`, 'PATCH', { status: 'En curso' }, 409);
+    await f.developer(`${tasks}/${task.id}/status`, 'PATCH', { status: 'Terminado' }, 409);
+    await f.master(`/projects/${f.project.id}/impediments/${impediment.id}/close`, 'POST', { solution: 'Se creó el buzón' });
+    await f.developer(`${tasks}/${task.id}/status`, 'PATCH', { status: 'En curso' });
+  } finally { await f.close(); }
+});

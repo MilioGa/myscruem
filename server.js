@@ -505,6 +505,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.patch('/api/projects/:id/tasks/:taskId/status', auth, (req, res) => {
     const task = activeTaskFor(req);
     if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
+    if (task.status !== req.body.status && get("SELECT id FROM impediments WHERE task_id=? AND status='Abierto'", task.id)) fail('La tarea tiene un impedimento abierto. Resuélvelo antes de moverla.', 409);
     transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
       run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
