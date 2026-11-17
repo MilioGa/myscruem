@@ -48,6 +48,13 @@ try {
   }
   const today = new Date();
   const date = offset => new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset).toLocaleDateString('en-CA');
+  const previous = await master.request(`/projects/${project.id}/sprints`, 'POST', { name: 'Sprint 2', startDate: date(-7), endDate: date(-1), goal: 'Perfil del cliente disponible.' });
+  await developer.request(`/projects/${project.id}/sprints/${previous.id}/stories`, 'POST', { storyId: ids[3] });
+  await master.request(`/projects/${project.id}/sprints/${previous.id}/start`, 'POST');
+  const profile = await developer.request(`/projects/${project.id}/tasks`, 'POST', { title: 'Pantalla de perfil', storyId: ids[3], assigneeId: developer.id, label: 'Frontend', type: 'Desarrollo' });
+  await developer.request(`/projects/${project.id}/tasks/${profile.id}/status`, 'PATCH', { status: 'Terminado' });
+  await master.request(`/projects/${project.id}/sprints/${previous.id}/close`, 'POST');
+  await owner.request(`/projects/${project.id}/dod`, 'PUT', { criteria: ['Código revisado por otro integrante', 'Pruebas automáticas aprobadas', 'Criterios de aceptación cumplidos'] });
   const sprint = await master.request(`/projects/${project.id}/sprints`, 'POST', { name: 'Sprint 3', startDate: date(0), endDate: date(6), goal: 'Tablero Kanban y gráfico Burndown operativos.' });
   for (const id of ids.slice(0, 3)) await developer.request(`/projects/${project.id}/sprints/${sprint.id}/stories`, 'POST', { storyId: id });
   await master.request(`/projects/${project.id}/sprints/${sprint.id}/start`, 'POST');
@@ -59,8 +66,13 @@ try {
   for (const [storyId, title, person, status, label, type] of tasks) {
     const task = await developer.request(`/projects/${project.id}/tasks`, 'POST', { title, storyId, assigneeId: person.id, label, type });
     if (status !== 'Por hacer') await developer.request(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status });
+    if (title === 'Listado de pedidos') {
+      await second.request(`/projects/${project.id}/tasks/${task.id}/comments`, 'POST', { body: 'Revisé el diseño del listado, solo falta la paginación.' });
+      await developer.request(`/projects/${project.id}/tasks/${task.id}/attachments`, 'POST', { filename: 'criterios-listado.txt', data: Buffer.from('Mostrar 20 pedidos por página ordenados por fecha.').toString('base64') });
+    }
     if (title === 'Consulta de ventas') await developer.request(`/projects/${project.id}/tasks/${task.id}/impediments`, 'POST', { description: 'Falta acceso a la base de ventas de prueba.' });
   }
+  await master.request(`/projects/${project.id}/sprints/${sprint.id}/meetings`, 'POST', { type: 'Daily', date: date(0), attendees: 'Todo el equipo', notes: 'Se revisó el avance del tablero y el impedimento de la consulta de ventas.', agreements: ['Solicitar acceso a la base de ventas de prueba', 'Revisar el filtro por estado'] });
   console.log(`Datos de demostración creados. Código: empresa-demo · Contraseña: ${password}`);
   console.log('Usuarios: admin@demo.test, po@demo.test, sm@demo.test, dev@demo.test, dev2@demo.test');
 } finally {

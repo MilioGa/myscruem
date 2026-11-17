@@ -2,6 +2,16 @@
   "title": "Glosario Scrum",
   "terms": [
     {
+      "term": "Acta",
+      "definition": "Registro escrito de lo tratado en un evento Scrum, con asistentes, notas y acuerdos.",
+      "example": "El Scrum Master la registra desde Sprints > Actas."
+    },
+    {
+      "term": "Acuerdo",
+      "definition": "Compromiso que el equipo adopta en un evento y al que se le da seguimiento.",
+      "example": "Se marca como atendido en el acta cuando se cumple."
+    },
+    {
       "term": "Criterios de aceptación",
       "definition": "Condiciones verificables que una historia debe cumplir para considerarse terminada.",
       "example": "Se escriben uno por línea al crear la historia."
@@ -75,6 +85,11 @@
       "term": "MoSCoW",
       "definition": "Técnica de priorización: Must, Should, Could y Won’t have.",
       "example": "Cada historia del backlog tiene una de estas cuatro prioridades."
+    },
+    {
+      "term": "Notificación",
+      "definition": "Aviso que informa a una persona de un cambio que le afecta.",
+      "example": "La campana avisa de asignaciones, cambios de estado e impedimentos cerrados."
     },
     {
       "term": "Planificación del sprint",
