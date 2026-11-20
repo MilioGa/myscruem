@@ -78,6 +78,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS epics (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id,name))');
   if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'epic_id')) db.exec('ALTER TABLE stories ADD COLUMN epic_id INTEGER REFERENCES epics(id)');
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'criteria_done')) db.exec("ALTER TABLE stories ADD COLUMN criteria_done TEXT NOT NULL DEFAULT '[]'");
   if (!db.prepare('PRAGMA table_info(epics)').all().some(column => column.name === 'color')) db.exec("ALTER TABLE epics ADD COLUMN color TEXT NOT NULL DEFAULT '#254e80'");
   db.exec(`
     CREATE TABLE IF NOT EXISTS impediments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Abierto' CHECK(status IN ('Abierto','Cerrado')), reported_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, solution TEXT, closed_by INTEGER REFERENCES users(id), closed_at TEXT);
@@ -303,7 +304,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.get('/api/projects/:id/stories', auth, (req, res) => {
     const project = projectFor(req);
     const stories = all('SELECT stories.*,sprint_stories.sprint_id FROM stories LEFT JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE stories.project_id=? ORDER BY position,id', project.id);
-    res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })));
+    res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria), criteria_done: JSON.parse(story.criteria_done) })));
   });
   const storyData = (req, project) => {
     const title = text(req.body.title, 'Título');
@@ -363,8 +364,26 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
     if (!story) fail('Historia no encontrada.', 404);
     const data = storyData(req, project);
-    run('UPDATE stories SET title=?,actor=?,goal=?,benefit=?,criteria=?,epic_id=? WHERE id=?', data.title, data.actor, data.goal, data.benefit, JSON.stringify(data.criteria), data.epicId, story.id);
+    const current = get('SELECT criteria,criteria_done FROM stories WHERE id=?', story.id);
+    const previous = JSON.parse(current.criteria);
+    const kept = JSON.parse(current.criteria_done).map(index => previous[index]).map(value => data.criteria.indexOf(value)).filter(index => index >= 0);
+    run('UPDATE stories SET title=?,actor=?,goal=?,benefit=?,criteria=?,criteria_done=?,epic_id=? WHERE id=?', data.title, data.actor, data.goal, data.benefit, JSON.stringify(data.criteria), JSON.stringify([...new Set(kept)].sort((a, b) => a - b)), data.epicId, story.id);
     res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/criteria/:index', auth, (req, res) => {
+    const project = projectFor(req);
+    if (!(req.user.role === 'Developer' || req.user.role === 'Product Owner' && project.owner_id === req.user.id)) fail('Solo el Product Owner del proyecto o un Developer pueden marcar criterios.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const story = get('SELECT id,criteria,criteria_done FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0 || index >= JSON.parse(story.criteria).length) fail('Criterio no encontrado.', 404);
+    if (typeof req.body.done !== 'boolean') fail('Indica si el criterio se cumple.');
+    const done = new Set(JSON.parse(story.criteria_done));
+    if (req.body.done) done.add(index); else done.delete(index);
+    const result = [...done].sort((a, b) => a - b);
+    run('UPDATE stories SET criteria_done=? WHERE id=?', JSON.stringify(result), story.id);
+    res.json({ criteria_done: result });
   });
   app.delete('/api/projects/:id/stories/:storyId', auth, (req, res) => {
     const project = storyOwner(req);
@@ -563,6 +582,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const task = activeTaskFor(req);
     if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
     if (task.status !== req.body.status && get("SELECT id FROM impediments WHERE task_id=? AND status='Abierto'", task.id)) fail('La tarea tiene un impedimento abierto. Resuélvelo antes de moverla.', 409);
+    if (req.body.status === 'Terminado' && task.status !== 'Terminado' && !get("SELECT id FROM tasks WHERE sprint_id=? AND story_id=? AND id<>? AND status<>'Terminado'", task.sprint_id, task.story_id, task.id)) {
+      const story = get('SELECT criteria,criteria_done FROM stories WHERE id=?', task.story_id);
+      if (JSON.parse(story.criteria_done).length < JSON.parse(story.criteria).length) fail('La historia tiene criterios de aceptación sin marcar. Márcalos antes de pasarla a Terminado.', 409);
+    }
     transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
       run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);

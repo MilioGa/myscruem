@@ -12,7 +12,9 @@ test('Flujo final: del backlog al cierre del sprint con DoD, comentarios, actas 
     await f.owner(`/projects/${f.project.id}/dod`, 'PUT', { criteria: ['Código revisado', 'Pruebas aprobadas'] });
     const epic = f.epic;
     const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.accept(story.id);
     const extra = await f.owner(f.stories, 'POST', { ...f.story, title: 'Perfil del cliente' }, 201);
+    await f.accept(extra.id);
     await f.owner(`${f.stories}/${story.id}/epic`, 'PATCH', { epicId: epic.id });
     await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 5 });
     await f.developer(`${f.stories}/${extra.id}/estimate`, 'PATCH', { points: 3 });

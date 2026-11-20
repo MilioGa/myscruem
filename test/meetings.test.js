@@ -44,6 +44,7 @@ test('Velocidad del equipo por sprint cerrado', async () => {
       const ids = [];
       for (const value of points) {
         const story = await f.owner(f.stories, 'POST', { ...f.story, title: `${name} ${value}` }, 201);
+        await f.accept(story.id);
         await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: value });
         ids.push(story.id);
       }

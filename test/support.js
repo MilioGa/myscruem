@@ -47,5 +47,9 @@ export async function setup(options = {}) {
   const secondEpic = await master.request(`/projects/${secondProject.id}/epics`, 'POST', { name: 'General', description: 'Funciones generales', color: '#2f8f6b' }, 201);
   const story = { title: 'Registro de clientes', actor: 'vendedor', goal: 'registrar clientes', benefit: 'atender sus solicitudes', criteria: ['El nombre es obligatorio.', 'Los datos se guardan.'], epicId: epic.id };
   const stories = `/projects/${project.id}/stories`;
-  return { db, admin, outside, owner: owner.request, otherOwner: otherOwner.request, developer: developer.request, master: master.request, project, secondProject, epic, secondEpic, story, stories, close: async () => { await new Promise(resolve => server.close(resolve)); db.close(); } };
+  const accept = async (storyId, projectId = project.id) => {
+    const item = (await owner.request(`/projects/${projectId}/stories`)).find(story => story.id === storyId);
+    for (let index = 0; index < item.criteria.length; index++) await developer.request(`/projects/${projectId}/stories/${storyId}/criteria/${index}`, 'PATCH', { done: true });
+  };
+  return { db, admin, accept, outside, owner: owner.request, otherOwner: otherOwner.request, developer: developer.request, master: master.request, project, secondProject, epic, secondEpic, story, stories, close: async () => { await new Promise(resolve => server.close(resolve)); db.close(); } };
 }

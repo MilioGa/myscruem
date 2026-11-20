@@ -38,3 +38,4 @@
 .panel-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.panel-card{display:grid;gap:8px;text-align:left;background:#fff;border:1px solid #e3e7ed;border-radius:12px;padding:24px;color:#243247}.panel-card:hover{border-color:#8cadd4;background:#f8fafd}.panel-card span{font-size:24px;color:#254e80}.panel-card strong{font-size:17px}
 .quiet.danger{color:#b84438}.quiet.danger:hover{background:#fbeeec}.primary.danger-button{background:#b84438}.primary.danger-button:hover{background:#963329}
 .epic-dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--epic);margin-right:8px;vertical-align:middle}.epic-chip{border-left:4px solid var(--epic)}.story-edit{display:flex;gap:6px}.color-field input{height:46px;padding:4px;width:90px}
+.criteria-list{display:grid;gap:4px;margin-top:8px}.criteria-list .check{margin:0;font-weight:500}.criteria-list .done{color:#2f7a5b}

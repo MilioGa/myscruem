@@ -11,6 +11,7 @@ test('Flujo completo del sprint 4 sin afectar el tablero ni el Burndown', async 
     await f.admin('/teams', 'POST', { name: 'Equipo Portal', projectId: f.project.id, memberIds: [developerId, users.find(user => user.name === 'master').id, users.find(user => user.name === 'owner').id] }, 201);
     const epic = f.epic;
     const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.accept(story.id);
     await f.owner(`${f.stories}/${story.id}/epic`, 'PATCH', { epicId: epic.id });
     await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 5 });
     const sprints = `/projects/${f.project.id}/sprints`;
