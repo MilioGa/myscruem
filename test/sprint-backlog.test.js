@@ -7,7 +7,7 @@ test('Selección de historias sin duplicados y suma persistente', async () => {
   try {
     const a = await f.owner(f.stories, 'POST', f.story, 201);
     const b = await f.owner(f.stories, 'POST', { ...f.story, title: 'Consulta' }, 201);
-    const other = await f.owner(`/projects/${f.secondProject.id}/stories`, 'POST', f.story, 201);
+    const other = await f.owner(`/projects/${f.secondProject.id}/stories`, 'POST', { ...f.story, epicId: f.secondEpic.id }, 201);
     const sprint = await f.master(`/projects/${f.project.id}/sprints`, 'POST', { name: 'Sprint 2', startDate: '2026-10-23', endDate: '2026-10-26', goal: 'Registro y consulta' }, 201);
     const path = `/projects/${f.project.id}/sprints/${sprint.id}/stories`;
     await f.owner(path, 'POST', { storyId: a.id }, 403);

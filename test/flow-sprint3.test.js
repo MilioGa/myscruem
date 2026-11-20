@@ -7,7 +7,9 @@ test('Flujo completo del sprint 3: tablero Kanban y Burndown', async () => {
   const f = await setup({ now: () => current });
   try {
     const a = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.accept(a.id);
     const b = await f.owner(f.stories, 'POST', { ...f.story, title: 'Consulta' }, 201);
+    await f.accept(b.id);
     await f.developer(`${f.stories}/${a.id}/estimate`, 'PATCH', { points: 5 });
     await f.developer(`${f.stories}/${b.id}/estimate`, 'PATCH', { points: 3 });
     const sprints = `/projects/${f.project.id}/sprints`;

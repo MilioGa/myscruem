@@ -78,11 +78,20 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS epics (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id,name))');
   if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'epic_id')) db.exec('ALTER TABLE stories ADD COLUMN epic_id INTEGER REFERENCES epics(id)');
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'criteria_done')) db.exec("ALTER TABLE stories ADD COLUMN criteria_done TEXT NOT NULL DEFAULT '[]'");
+  if (!db.prepare('PRAGMA table_info(epics)').all().some(column => column.name === 'color')) db.exec("ALTER TABLE epics ADD COLUMN color TEXT NOT NULL DEFAULT '#254e80'");
   db.exec(`
     CREATE TABLE IF NOT EXISTS impediments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Abierto' CHECK(status IN ('Abierto','Cerrado')), reported_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, solution TEXT, closed_by INTEGER REFERENCES users(id), closed_at TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
   `);
   db.exec('CREATE TABLE IF NOT EXISTS definition_of_done (project_id INTEGER PRIMARY KEY REFERENCES projects(id), criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'estimated_hours')) db.exec('ALTER TABLE stories ADD COLUMN estimated_hours REAL');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS poker_sessions (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), story_id INTEGER NOT NULL REFERENCES stories(id), status TEXT NOT NULL DEFAULT 'Votando' CHECK(status IN ('Votando','Revelada','Cerrada')), round INTEGER NOT NULL DEFAULT 1, points INTEGER, hours REAL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_open_poker ON poker_sessions(story_id) WHERE status<>'Cerrada';
+    CREATE TABLE IF NOT EXISTS poker_votes (session_id INTEGER NOT NULL REFERENCES poker_sessions(id), round INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), value TEXT NOT NULL, PRIMARY KEY(session_id,round,user_id));
+  `);
+  db.exec("CREATE TABLE IF NOT EXISTS scoped_dod (scope TEXT NOT NULL CHECK(scope IN ('Historia','Sprint')), ref_id INTEGER NOT NULL, criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(scope,ref_id))");
   db.exec(`
     CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), actor_id INTEGER REFERENCES users(id), project_id INTEGER REFERENCES projects(id), task_id INTEGER REFERENCES tasks(id), kind TEXT NOT NULL, message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS notifications_by_user ON notifications(user_id,read,id);
@@ -97,6 +106,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
+  if (!db.prepare('PRAGMA table_info(projects)').all().some(column => column.name === 'created_by')) {
+    db.exec('ALTER TABLE projects ADD COLUMN created_by INTEGER REFERENCES users(id)');
+    db.exec('UPDATE projects SET created_by=owner_id');
+  }
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
   const taskTypes = ['Desarrollo', 'Pruebas', 'Diseño', 'Documentación'];
   const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map(column => column.name);
@@ -149,8 +162,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     next();
   };
   const admin = (req, res, next) => req.user.role === 'Administrador' ? next() : res.status(403).json({ error: 'Se requiere el rol Administrador.' });
+  const teamManager = (req, res, next) => ['Administrador', 'Scrum Master'].includes(req.user.role) ? next() : res.status(403).json({ error: 'Se requiere el rol Administrador o Scrum Master.' });
+  const participates = "(?='Administrador' OR p.owner_id=? OR NOT EXISTS(SELECT 1 FROM teams WHERE teams.project_id=p.id) OR EXISTS(SELECT 1 FROM teams JOIN team_members ON team_members.team_id=teams.id WHERE teams.project_id=p.id AND team_members.user_id=?))";
   const projectFor = req => {
-    const p = get('SELECT * FROM projects WHERE id=? AND company_id=?', req.params.id, req.user.company_id);
+    const p = get(`SELECT p.* FROM projects p WHERE p.id=? AND p.company_id=? AND ${participates}`, req.params.id, req.user.company_id, req.user.role, req.user.id, req.user.id);
     if (!p) fail('Proyecto no encontrado.', 404);
     return p;
   };
@@ -198,7 +213,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('DELETE FROM sessions WHERE id=?', req.user.sid);
     res.clearCookie('sid', cookieOptions).json({ ok: true });
   });
-  app.get('/api/users', auth, admin, (req, res) => res.json(all('SELECT id,name,email,role,status FROM users WHERE company_id=? ORDER BY name', req.user.company_id)));
+  app.get('/api/users', auth, teamManager, (req, res) => res.json(all('SELECT id,name,email,role,status FROM users WHERE company_id=? ORDER BY name', req.user.company_id)));
   app.post('/api/users', auth, admin, (req, res) => {
     const name = text(req.body.name, 'Nombre');
     const address = email(req.body.email);
@@ -236,7 +251,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (user.password && status === 'Pendiente') fail('La cuenta ya fue activada.');
     if (user.id === req.user.id && (role !== 'Administrador' || status !== 'Activo')) fail('No puedes desactivar tu cuenta ni quitarte el rol Administrador.');
     if (get('SELECT id FROM users WHERE company_id=? AND email=? AND id<>?', req.user.company_id, address, user.id)) fail('El correo ya está registrado.', 409);
-    if ((role !== 'Product Owner' || status !== 'Activo') && get('SELECT id FROM projects WHERE owner_id=? AND archived=0', user.id)) fail('Reasigna o archiva sus proyectos activos antes de cambiar el rol o desactivar al Product Owner.');
+    if (user.role === 'Product Owner' && (role !== 'Product Owner' || status !== 'Activo') && get('SELECT id FROM projects WHERE owner_id=? AND archived=0', user.id)) fail('Reasigna o archiva sus proyectos activos antes de cambiar el rol o desactivar al Product Owner.');
     transaction(() => {
       run('UPDATE users SET name=?,email=?,role=?,status=? WHERE id=?', name, address, role, status, user.id);
       if (status !== 'Activo' || role !== user.role) run('DELETE FROM sessions WHERE user_id=?', user.id);
@@ -245,13 +260,41 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     res.json({ ok: true });
   });
   app.get('/api/owners', auth, (req, res) => res.json(all("SELECT id,name FROM users WHERE company_id=? AND role='Product Owner' AND status='Activo'", req.user.company_id)));
-  app.get('/api/projects', auth, (req, res) => res.json(all('SELECT p.*,u.name AS owner FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.company_id=? ORDER BY p.id DESC', req.user.company_id)));
+  app.get('/api/projects', auth, (req, res) => res.json(all(`SELECT p.*,u.name AS owner FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.company_id=? AND ${participates} ORDER BY p.id DESC`, req.user.company_id, req.user.role, req.user.id, req.user.id)));
   app.post('/api/projects', auth, (req, res) => {
-    if (req.user.role !== 'Product Owner') fail('Solo un Product Owner puede crear proyectos.', 403);
     const name = text(req.body.name, 'Nombre');
     const description = text(req.body.description, 'Descripción', 2000);
-    const id = Number(run('INSERT INTO projects(company_id,name,description,owner_id) VALUES (?,?,?,?)', req.user.company_id, name, description, req.user.id).lastInsertRowid);
+    const id = Number(run('INSERT INTO projects(company_id,name,description,owner_id,created_by) VALUES (?,?,?,?,?)', req.user.company_id, name, description, req.user.id, req.user.id).lastInsertRowid);
     res.status(201).json({ id });
+  });
+  const projectTasks = 'SELECT tasks.id FROM tasks JOIN sprints ON sprints.id=tasks.sprint_id WHERE sprints.project_id=?';
+  const projectSprints = 'SELECT id FROM sprints WHERE project_id=?';
+  const projectCleanup = [
+    `DELETE FROM notifications WHERE project_id=? OR task_id IN (${projectTasks})`,
+    `DELETE FROM task_comments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM task_attachments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM impediments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM tasks WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM agreements WHERE meeting_id IN (SELECT meetings.id FROM meetings JOIN sprints ON sprints.id=meetings.sprint_id WHERE sprints.project_id=?)`,
+    `DELETE FROM meetings WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM burndown WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM sprint_stories WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM scoped_dod WHERE scope='Sprint' AND ref_id IN (${projectSprints})`,
+    "DELETE FROM scoped_dod WHERE scope='Historia' AND ref_id IN (SELECT id FROM stories WHERE project_id=?)",
+    'DELETE FROM poker_votes WHERE session_id IN (SELECT id FROM poker_sessions WHERE project_id=?)',
+    'DELETE FROM poker_sessions WHERE project_id=?',
+    'DELETE FROM sprints WHERE project_id=?',
+    'DELETE FROM stories WHERE project_id=?',
+    'DELETE FROM epics WHERE project_id=?',
+    'DELETE FROM definition_of_done WHERE project_id=?',
+    'UPDATE teams SET project_id=NULL WHERE project_id=?',
+    'DELETE FROM projects WHERE id=?'
+  ];
+  app.delete('/api/projects/:id', auth, (req, res) => {
+    const p = projectFor(req);
+    if (p.created_by !== req.user.id && !(req.user.role === 'Product Owner' && p.owner_id === req.user.id)) fail('Solo quien creó el proyecto o su Product Owner pueden eliminarlo.', 403);
+    transaction(() => projectCleanup.forEach(sql => run(sql, ...Array(sql.split('?').length - 1).fill(p.id))));
+    res.json({ ok: true });
   });
   app.patch('/api/projects/:id', auth, (req, res) => {
     const p = projectFor(req);
@@ -272,20 +315,30 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.get('/api/projects/:id/stories', auth, (req, res) => {
     const project = projectFor(req);
     const stories = all('SELECT stories.*,sprint_stories.sprint_id FROM stories LEFT JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE stories.project_id=? ORDER BY position,id', project.id);
-    res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })));
+    res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria), criteria_done: JSON.parse(story.criteria_done) })));
   });
-  app.post('/api/projects/:id/stories', auth, (req, res) => {
-    const project = projectFor(req);
-    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner de este proyecto puede crear historias.', 403);
-    if (project.archived) fail('No se pueden agregar historias a un proyecto archivado.');
+  const storyData = (req, project) => {
     const title = text(req.body.title, 'Título');
     const actor = text(req.body.actor, 'Como', 300);
     const goal = text(req.body.goal, 'Quiero', 1000);
     const benefit = text(req.body.benefit, 'Para', 1000);
     if (!Array.isArray(req.body.criteria) || !req.body.criteria.length || req.body.criteria.length > 20) fail('Agrega entre 1 y 20 criterios de aceptación.');
     const criteria = req.body.criteria.map(value => text(value, 'Criterio de aceptación', 1000));
+    const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
+    if (!epic) fail('Selecciona la épica de la historia; es obligatoria.');
+    return { title, actor, goal, benefit, criteria, epicId: epic.id };
+  };
+  const storyOwner = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner de este proyecto puede gestionar historias.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    return project;
+  };
+  app.post('/api/projects/:id/stories', auth, (req, res) => {
+    const project = storyOwner(req);
+    const data = storyData(req, project);
     const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM stories WHERE project_id=?', project.id).next;
-    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria,position) VALUES (?,?,?,?,?,?,?)', project.id, title, actor, goal, benefit, JSON.stringify(criteria), position).lastInsertRowid);
+    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria,position,epic_id) VALUES (?,?,?,?,?,?,?,?)', project.id, data.title, data.actor, data.goal, data.benefit, JSON.stringify(data.criteria), position, data.epicId).lastInsertRowid);
     res.status(201).json({ id });
   });
   app.patch('/api/projects/:id/stories/:storyId/estimate', auth, (req, res) => {
@@ -316,6 +369,120 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!['Must have', 'Should have', 'Could have', 'Won’t have'].includes(req.body.priority)) fail('Selecciona una prioridad MoSCoW válida.');
     run('UPDATE stories SET priority=? WHERE id=?', req.body.priority, req.params.storyId);
     res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId', auth, (req, res) => {
+    const project = storyOwner(req);
+    const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    const data = storyData(req, project);
+    const current = get('SELECT criteria,criteria_done FROM stories WHERE id=?', story.id);
+    const previous = JSON.parse(current.criteria);
+    const kept = JSON.parse(current.criteria_done).map(index => previous[index]).map(value => data.criteria.indexOf(value)).filter(index => index >= 0);
+    run('UPDATE stories SET title=?,actor=?,goal=?,benefit=?,criteria=?,criteria_done=?,epic_id=? WHERE id=?', data.title, data.actor, data.goal, data.benefit, JSON.stringify(data.criteria), JSON.stringify([...new Set(kept)].sort((a, b) => a - b)), data.epicId, story.id);
+    res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId/criteria/:index', auth, (req, res) => {
+    const project = projectFor(req);
+    if (!(req.user.role === 'Developer' || req.user.role === 'Product Owner' && project.owner_id === req.user.id)) fail('Solo el Product Owner del proyecto o un Developer pueden marcar criterios.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const story = get('SELECT id,criteria,criteria_done FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0 || index >= JSON.parse(story.criteria).length) fail('Criterio no encontrado.', 404);
+    if (typeof req.body.done !== 'boolean') fail('Indica si el criterio se cumple.');
+    const done = new Set(JSON.parse(story.criteria_done));
+    if (req.body.done) done.add(index); else done.delete(index);
+    const result = [...done].sort((a, b) => a - b);
+    run('UPDATE stories SET criteria_done=? WHERE id=?', JSON.stringify(result), story.id);
+    res.json({ criteria_done: result });
+  });
+  app.delete('/api/projects/:id/stories/:storyId', auth, (req, res) => {
+    const project = storyOwner(req);
+    const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    if (get('SELECT story_id FROM sprint_stories WHERE story_id=?', story.id) || get('SELECT id FROM tasks WHERE story_id=?', story.id)) fail('La historia está en un sprint o tiene tareas; no se puede eliminar.', 409);
+    transaction(() => {
+      run("DELETE FROM scoped_dod WHERE scope='Historia' AND ref_id=?", story.id);
+      run('DELETE FROM poker_votes WHERE session_id IN (SELECT id FROM poker_sessions WHERE story_id=?)', story.id);
+      run('DELETE FROM poker_sessions WHERE story_id=?', story.id);
+      run('DELETE FROM stories WHERE id=?', story.id);
+    });
+    res.json({ ok: true });
+  });
+  const notify = (userId, actor, projectId, taskId, kind, message) => {
+    if (!userId || userId === actor.id) return;
+    run('INSERT INTO notifications(user_id,actor_id,project_id,task_id,kind,message,created_at) VALUES (?,?,?,?,?,?,?)', userId, actor.id, projectId, taskId, kind, message, now().toISOString());
+  };
+  const pokerCards = ['1', '2', '3', '5', '8', '13', '21', '?'];
+  const pokerFor = (req, master = false) => {
+    const project = projectFor(req);
+    if (master && req.user.role !== 'Scrum Master') fail('Solo el Scrum Master dirige el Planning Poker.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const session = get('SELECT * FROM poker_sessions WHERE id=? AND project_id=?', Number(req.params.sessionId) || 0, project.id);
+    if (!session) fail('Sesión de Planning Poker no encontrada.', 404);
+    return { project, session };
+  };
+  app.get('/api/projects/:id/poker', auth, (req, res) => {
+    const project = projectFor(req);
+    res.json(all("SELECT poker_sessions.id,poker_sessions.story_id,poker_sessions.status,poker_sessions.round,stories.title,(SELECT COUNT(*) FROM poker_votes WHERE poker_votes.session_id=poker_sessions.id AND poker_votes.round=poker_sessions.round) AS votes FROM poker_sessions JOIN stories ON stories.id=poker_sessions.story_id WHERE poker_sessions.project_id=? AND poker_sessions.status<>'Cerrada' ORDER BY poker_sessions.id", project.id));
+  });
+  app.post('/api/projects/:id/poker', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo el Scrum Master dirige el Planning Poker.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const story = get('SELECT id,title FROM stories WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    if (get("SELECT id FROM poker_sessions WHERE story_id=? AND status<>'Cerrada'", story.id)) fail('La historia ya tiene una sesión de Planning Poker abierta.', 409);
+    const id = transaction(() => {
+      const created = Number(run('INSERT INTO poker_sessions(project_id,story_id,created_by,created_at) VALUES (?,?,?,?)', project.id, story.id, req.user.id, now().toISOString()).lastInsertRowid);
+      const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
+      const people = team ? all("SELECT users.id FROM team_members JOIN users ON users.id=team_members.user_id WHERE team_id=? AND users.status='Activo'", team.id) : all("SELECT id FROM users WHERE company_id=? AND status='Activo' AND role IN ('Developer','Product Owner')", project.company_id);
+      for (const person of people) notify(person.id, req.user, project.id, null, 'Planning Poker', `${req.user.name} abrió el Planning Poker de "${story.title}" en ${project.name}.`);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.get('/api/projects/:id/poker/:sessionId', auth, (req, res) => {
+    const project = projectFor(req);
+    const session = get('SELECT poker_sessions.*,stories.title,stories.actor,stories.goal,stories.benefit,stories.points AS story_points,stories.estimated_hours FROM poker_sessions JOIN stories ON stories.id=poker_sessions.story_id WHERE poker_sessions.id=? AND poker_sessions.project_id=?', Number(req.params.sessionId) || 0, project.id);
+    if (!session) fail('Sesión de Planning Poker no encontrada.', 404);
+    const votes = all('SELECT poker_votes.user_id,poker_votes.value,users.name FROM poker_votes JOIN users ON users.id=poker_votes.user_id WHERE session_id=? AND round=? ORDER BY users.name', session.id, session.round);
+    const hidden = session.status === 'Votando';
+    res.json({ ...session, cards: pokerCards, votes: votes.map(vote => ({ name: vote.name, value: hidden ? null : vote.value })), mine: votes.find(vote => vote.user_id === req.user.id)?.value ?? null });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/vote', auth, (req, res) => {
+    const { session } = pokerFor(req);
+    if (req.user.role === 'Administrador') fail('El Administrador no participa en el Planning Poker.', 403);
+    if (session.status !== 'Votando') fail('La votación de esta ronda ya se reveló.', 409);
+    if (!pokerCards.includes(req.body.value)) fail('Elige una carta: 1, 2, 3, 5, 8, 13, 21 o ?.');
+    run('INSERT INTO poker_votes(session_id,round,user_id,value) VALUES (?,?,?,?) ON CONFLICT(session_id,round,user_id) DO UPDATE SET value=excluded.value', session.id, session.round, req.user.id, req.body.value);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/reveal', auth, (req, res) => {
+    const { session } = pokerFor(req, true);
+    if (session.status !== 'Votando') fail('La ronda ya está revelada.', 409);
+    if (!get('SELECT user_id FROM poker_votes WHERE session_id=? AND round=?', session.id, session.round)) fail('Nadie ha votado en esta ronda.');
+    run("UPDATE poker_sessions SET status='Revelada' WHERE id=?", session.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/round', auth, (req, res) => {
+    const { session } = pokerFor(req, true);
+    if (session.status !== 'Revelada') fail('Revela los votos antes de iniciar otra ronda.', 409);
+    run("UPDATE poker_sessions SET status='Votando',round=round+1 WHERE id=?", session.id);
+    res.json({ round: session.round + 1 });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/confirm', auth, (req, res) => {
+    const { session } = pokerFor(req, true);
+    if (session.status !== 'Revelada') fail('Revela los votos antes de confirmar la estimación.', 409);
+    if (![1, 2, 3, 5, 8, 13, 21].includes(req.body.points)) fail('Selecciona 1, 2, 3, 5, 8, 13 o 21 puntos.');
+    if (typeof req.body.hours !== 'number' || !Number.isFinite(req.body.hours) || req.body.hours <= 0 || req.body.hours > 999) fail('Indica las horas estimadas (mayor que 0 y hasta 999).');
+    if (req.body.points > 13 && get('SELECT story_id FROM sprint_stories WHERE story_id=?', session.story_id)) fail('Una historia comprometida no puede superar 13 puntos.');
+    const hours = Math.round(req.body.hours * 10) / 10;
+    transaction(() => {
+      run('UPDATE stories SET points=?,estimated_hours=? WHERE id=?', req.body.points, hours, session.story_id);
+      run("UPDATE poker_sessions SET status='Cerrada',points=?,hours=? WHERE id=?", req.body.points, hours, session.id);
+    });
+    res.json({ points: req.body.points, hours });
   });
   app.get('/api/projects/:id/sprints', auth, (req, res) => {
     const project = projectFor(req);
@@ -460,10 +627,6 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const sprint = get("SELECT id,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     res.json({ sprintId: sprint?.id ?? null, version: sprint?.board_version ?? 0 });
   });
-  const notify = (userId, actor, projectId, taskId, kind, message) => {
-    if (!userId || userId === actor.id) return;
-    run('INSERT INTO notifications(user_id,actor_id,project_id,task_id,kind,message,created_at) VALUES (?,?,?,?,?,?,?)', userId, actor.id, projectId, taskId, kind, message, now().toISOString());
-  };
   const activeTaskFor = req => {
     const project = projectFor(req);
     if (req.user.role !== 'Developer') fail('Solo un Developer puede modificar tareas del tablero.', 403);
@@ -506,6 +669,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const task = activeTaskFor(req);
     if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
     if (task.status !== req.body.status && get("SELECT id FROM impediments WHERE task_id=? AND status='Abierto'", task.id)) fail('La tarea tiene un impedimento abierto. Resuélvelo antes de moverla.', 409);
+    if (req.body.status === 'Terminado' && task.status !== 'Terminado' && !get("SELECT id FROM tasks WHERE sprint_id=? AND story_id=? AND id<>? AND status<>'Terminado'", task.sprint_id, task.story_id, task.id)) {
+      const story = get('SELECT criteria,criteria_done FROM stories WHERE id=?', task.story_id);
+      if (JSON.parse(story.criteria_done).length < JSON.parse(story.criteria).length) fail('La historia tiene criterios de aceptación sin marcar. Márcalos antes de pasarla a Terminado.', 409);
+    }
     transaction(() => {
       const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM tasks WHERE sprint_id=?', task.sprint_id).next;
       run('UPDATE tasks SET status=?,position=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', req.body.status, task.status === req.body.status ? task.position : position, task.id);
@@ -531,18 +698,20 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     for (const id of memberIds) {
       if (!Number.isSafeInteger(id) || !get("SELECT id FROM users WHERE id=? AND company_id=? AND role<>'Administrador' AND status<>'Inactivo'", id, req.user.company_id)) fail('Los integrantes deben ser usuarios activos o pendientes de la empresa.');
     }
+    const memberRoles = new Set(memberIds.map(id => get('SELECT role FROM users WHERE id=?', id).role));
+    if (!['Scrum Master', 'Product Owner', 'Developer'].every(role => memberRoles.has(role))) fail('El equipo debe tener al menos un Scrum Master, un Product Owner y un Developer.');
     return { name, projectId, memberIds };
   };
   const saveMembers = (teamId, memberIds) => {
     run('DELETE FROM team_members WHERE team_id=?', teamId);
     for (const id of memberIds) run('INSERT INTO team_members(team_id,user_id) VALUES (?,?)', teamId, id);
   };
-  app.get('/api/teams', auth, admin, (req, res) => {
+  app.get('/api/teams', auth, teamManager, (req, res) => {
     const teams = all('SELECT teams.id,teams.name,teams.project_id,projects.name AS project FROM teams LEFT JOIN projects ON projects.id=teams.project_id WHERE teams.company_id=? ORDER BY teams.name', req.user.company_id);
     const members = all('SELECT team_members.team_id,users.id,users.name,users.role FROM team_members JOIN users ON users.id=team_members.user_id JOIN teams ON teams.id=team_members.team_id WHERE teams.company_id=? ORDER BY users.name', req.user.company_id);
     res.json(teams.map(team => ({ ...team, members: members.filter(member => member.team_id === team.id).map(({ team_id, ...member }) => member) })));
   });
-  app.post('/api/teams', auth, admin, (req, res) => {
+  app.post('/api/teams', auth, teamManager, (req, res) => {
     const data = teamData(req);
     const id = transaction(() => {
       const created = Number(run('INSERT INTO teams(company_id,name,project_id) VALUES (?,?,?)', req.user.company_id, data.name, data.projectId).lastInsertRowid);
@@ -551,7 +720,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.status(201).json({ id });
   });
-  app.patch('/api/teams/:id', auth, admin, (req, res) => {
+  app.patch('/api/teams/:id', auth, teamManager, (req, res) => {
     const team = get('SELECT * FROM teams WHERE id=? AND company_id=?', Number(req.params.id) || 0, req.user.company_id);
     if (!team) fail('Equipo no encontrado.', 404);
     const data = teamData(req, team);
@@ -561,46 +730,43 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.json({ ok: true });
   });
-  const epicOwner = req => {
+  const epicMaster = req => {
     const project = projectFor(req);
-    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede gestionar épicas.', 403);
+    if (req.user.role !== 'Scrum Master') fail('Solo el Scrum Master puede crear y editar épicas.', 403);
     if (project.archived) fail('El proyecto está archivado.');
     return project;
   };
   const epicData = (req, project, existing) => {
     const name = text(req.body.name, 'Nombre de la épica');
-    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    const description = text(req.body.description, 'Descripción de la épica', 1000);
+    if (typeof req.body.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(req.body.color)) fail('Selecciona el color de la épica.');
     if (get('SELECT id FROM epics WHERE project_id=? AND name=? AND id<>?', project.id, name, existing?.id ?? 0)) fail('Ya existe una épica con ese nombre.', 409);
-    return { name, description };
+    return { name, description, color: req.body.color.toLowerCase() };
   };
   app.get('/api/projects/:id/epics', auth, (req, res) => {
     const project = projectFor(req);
-    res.json(all('SELECT epics.id,epics.name,epics.description,COUNT(stories.id) AS stories,COALESCE(SUM(stories.points),0) AS points FROM epics LEFT JOIN stories ON stories.epic_id=epics.id WHERE epics.project_id=? GROUP BY epics.id ORDER BY epics.id', project.id));
+    res.json(all('SELECT epics.id,epics.name,epics.description,epics.color,COUNT(stories.id) AS stories,COALESCE(SUM(stories.points),0) AS points FROM epics LEFT JOIN stories ON stories.epic_id=epics.id WHERE epics.project_id=? GROUP BY epics.id ORDER BY epics.id', project.id));
   });
   app.post('/api/projects/:id/epics', auth, (req, res) => {
-    const project = epicOwner(req);
+    const project = epicMaster(req);
     const data = epicData(req, project);
-    res.status(201).json({ id: Number(run('INSERT INTO epics(project_id,name,description) VALUES (?,?,?)', project.id, data.name, data.description).lastInsertRowid) });
+    res.status(201).json({ id: Number(run('INSERT INTO epics(project_id,name,description,color) VALUES (?,?,?,?)', project.id, data.name, data.description, data.color).lastInsertRowid) });
   });
   app.patch('/api/projects/:id/epics/:epicId', auth, (req, res) => {
-    const project = epicOwner(req);
+    const project = epicMaster(req);
     const epic = get('SELECT * FROM epics WHERE id=? AND project_id=?', Number(req.params.epicId) || 0, project.id);
     if (!epic) fail('Épica no encontrada.', 404);
     const data = epicData(req, project, epic);
-    run('UPDATE epics SET name=?,description=? WHERE id=?', data.name, data.description, epic.id);
+    run('UPDATE epics SET name=?,description=?,color=? WHERE id=?', data.name, data.description, data.color, epic.id);
     res.json({ ok: true });
   });
   app.patch('/api/projects/:id/stories/:storyId/epic', auth, (req, res) => {
-    const project = epicOwner(req);
+    const project = storyOwner(req);
     const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
     if (!story) fail('Historia no encontrada.', 404);
-    let epicId = null;
-    if (req.body.epicId !== null) {
-      const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
-      if (!epic) fail('Selecciona una épica del proyecto.');
-      epicId = epic.id;
-    }
-    run('UPDATE stories SET epic_id=? WHERE id=?', epicId, story.id);
+    const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
+    if (!epic) fail('Selecciona una épica del proyecto.');
+    run('UPDATE stories SET epic_id=? WHERE id=?', epic.id, story.id);
     res.json({ ok: true });
   });
   app.get('/api/projects/:id/stories/:storyId/tasks', auth, (req, res) => {
@@ -661,16 +827,45 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const dod = get('SELECT definition_of_done.criteria,definition_of_done.updated_at,users.name AS updated_by FROM definition_of_done LEFT JOIN users ON users.id=definition_of_done.updated_by WHERE project_id=?', project.id);
     res.json(dod ? { criteria: JSON.parse(dod.criteria), updated_at: dod.updated_at, updated_by: dod.updated_by } : { criteria: [], updated_at: null, updated_by: null });
   });
+  const dodCriteria = req => {
+    if (!Array.isArray(req.body.criteria) || req.body.criteria.length > 15) fail('La Definition of Done admite hasta 15 criterios.');
+    const criteria = req.body.criteria.map(item => text(item, 'Criterio', 200));
+    if (new Set(criteria.map(item => item.toLowerCase())).size !== criteria.length) fail('Los criterios no pueden repetirse.');
+    return criteria;
+  };
   app.put('/api/projects/:id/dod', auth, (req, res) => {
     const project = projectFor(req);
     if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede definir la Definition of Done.', 403);
     if (project.archived) fail('El proyecto está archivado.');
-    if (!Array.isArray(req.body.criteria) || req.body.criteria.length > 15) fail('La Definition of Done admite hasta 15 criterios.');
-    const criteria = req.body.criteria.map(item => text(item, 'Criterio', 200));
-    if (new Set(criteria.map(item => item.toLowerCase())).size !== criteria.length) fail('Los criterios no pueden repetirse.');
+    const criteria = dodCriteria(req);
     run('INSERT INTO definition_of_done(project_id,criteria,updated_by,updated_at) VALUES (?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET criteria=excluded.criteria,updated_by=excluded.updated_by,updated_at=excluded.updated_at', project.id, JSON.stringify(criteria), req.user.id, now().toISOString());
     res.json({ criteria });
   });
+  const scopedTarget = req => {
+    const project = projectFor(req);
+    const [scope, ref] = req.params.storyId
+      ? ['Historia', get('SELECT id,title AS name FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id)]
+      : ['Sprint', get('SELECT id,name FROM sprints WHERE id=? AND project_id=?', Number(req.params.sprintId) || 0, project.id)];
+    if (!ref) fail(scope === 'Historia' ? 'Historia no encontrada.' : 'Sprint no encontrado.', 404);
+    return { project, scope, ref };
+  };
+  const readScoped = (req, res) => {
+    const { scope, ref } = scopedTarget(req);
+    const dod = get('SELECT scoped_dod.criteria,scoped_dod.updated_at,users.name AS updated_by FROM scoped_dod LEFT JOIN users ON users.id=scoped_dod.updated_by WHERE scope=? AND ref_id=?', scope, ref.id);
+    res.json({ scope, name: ref.name, criteria: dod ? JSON.parse(dod.criteria) : [], updated_at: dod?.updated_at ?? null, updated_by: dod?.updated_by ?? null });
+  };
+  const writeScoped = (req, res) => {
+    const { project, scope, ref } = scopedTarget(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede definir la Definition of Done.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const criteria = dodCriteria(req);
+    run('INSERT INTO scoped_dod(scope,ref_id,criteria,updated_by,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(scope,ref_id) DO UPDATE SET criteria=excluded.criteria,updated_by=excluded.updated_by,updated_at=excluded.updated_at', scope, ref.id, JSON.stringify(criteria), req.user.id, now().toISOString());
+    res.json({ criteria });
+  };
+  app.get('/api/projects/:id/stories/:storyId/dod', auth, readScoped);
+  app.put('/api/projects/:id/stories/:storyId/dod', auth, writeScoped);
+  app.get('/api/projects/:id/sprints/:sprintId/dod', auth, readScoped);
+  app.put('/api/projects/:id/sprints/:sprintId/dod', auth, writeScoped);
   app.get('/api/notifications', auth, (req, res) => {
     const unread = get('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0', req.user.id).total;
     const items = all('SELECT notifications.id,notifications.kind,notifications.message,notifications.read,notifications.created_at,notifications.project_id,notifications.task_id,projects.name AS project,actor.name AS actor FROM notifications LEFT JOIN projects ON projects.id=notifications.project_id LEFT JOIN users actor ON actor.id=notifications.actor_id WHERE notifications.user_id=? ORDER BY notifications.id DESC LIMIT 30', req.user.id);

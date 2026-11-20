@@ -1,7 +1,7 @@
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const notice = document.querySelector('#notice');
-let state = { page: 'projects', filter: 'active', query: '', projects: [], users: [], owners: [] };
+let state = { page: 'panel', filter: 'active', query: '', projects: [], users: [], owners: [] };
 let timer;
 let boardTimer;
 let notificationTimer;
@@ -56,12 +56,20 @@ async function load() {
   Object.assign(state, await api('/me'));
   state.projects = await api('/projects');
   state.owners = await api('/owners');
-  state.users = state.user.role === 'Administrador' ? await api('/users') : [];
-  state.teams = state.user.role === 'Administrador' ? await api('/teams') : [];
-  if (state.page === 'users' && state.user.role !== 'Administrador') state.page = 'projects';
+  const manager = ['Administrador', 'Scrum Master'].includes(state.user.role);
+  state.users = manager ? await api('/users') : [];
+  state.teams = manager ? await api('/teams') : [];
+  if (state.page === 'users' && state.user.role !== 'Administrador') state.page = 'panel';
+  if (state.page === 'teams' && !manager) state.page = 'panel';
   render();
 }
-const navItems = [['backlog', '☰', 'Product Backlog'], ['sprints', '◷', 'Sprints'], ['board', '▥', 'Tablero Kanban'], ['metrics', '↘', 'Métricas'], ['impediments', '⚠', 'Impedimentos']];
+const navItems = [['backlog', '☰', 'Product Backlog', ['Product Owner', 'Scrum Master', 'Developer']], ['sprints', '◷', 'Sprints', ['Product Owner', 'Scrum Master', 'Developer']], ['board', '▥', 'Tablero Kanban', ['Product Owner', 'Scrum Master', 'Developer']], ['metrics', '↘', 'Métricas', ['Product Owner', 'Scrum Master']], ['impediments', '⚠', 'Impedimentos', ['Scrum Master', 'Developer']]];
+const panels = {
+  Administrador: { title: 'Panel del Administrador', text: 'Gestiona usuarios, roles y proyectos de la empresa.', actions: [['page:users', '♧', 'Usuarios y roles', 'Invita personas y asigna su rol.'], ['page:projects', '▦', 'Proyectos', 'Consulta los proyectos de la empresa.']] },
+  'Product Owner': { title: 'Panel del Product Owner', text: 'Define qué se construye y en qué orden.', actions: [['nav:backlog', '☰', 'Product Backlog', 'Crea, prioriza y ordena las historias.'], ['nav:metrics', '↘', 'Métricas', 'Revisa el avance del producto.'], ['page:projects', '▦', 'Proyectos', 'Crea y administra tus proyectos.']] },
+  'Scrum Master': { title: 'Panel del Scrum Master', text: 'Facilita los eventos y elimina los impedimentos del equipo.', actions: [['nav:sprints', '◷', 'Sprints', 'Crea, inicia y cierra sprints.'], ['nav:impediments', '⚠', 'Impedimentos', 'Resuelve los bloqueos del equipo.'], ['nav:metrics', '↘', 'Métricas', 'Consulta el Burndown y la velocidad.'], ['page:teams', '♙', 'Equipos', 'Forma equipos con sus roles Scrum.']] },
+  Developer: { title: 'Panel del Developer', text: 'Construye el incremento y actualiza el avance de tus tareas.', actions: [['nav:board', '▥', 'Tablero Kanban', 'Mueve tus tarjetas y registra tu avance.'], ['nav:backlog', '☰', 'Estimar historias', 'Asigna puntos a las historias.'], ['nav:impediments', '⚠', 'Impedimentos', 'Registra lo que te bloquea.']] }
+};
 const activeProjects = () => state.projects.filter(project => !project.archived);
 const currentProject = () => {
   const active = activeProjects();
@@ -85,13 +93,13 @@ function render() {
   const isAdmin = state.user.role === 'Administrador';
   const active = activeProjects();
   const current = currentProject();
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}<div class="nav-group"><small>APRENDIZAJE</small></div><button data-page="training" class="${state.page === 'training' ? 'selected' : ''}"><span>✎</span> Capacitación</button>${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : state.page === 'training' ? 'Capacitación' : 'Proyectos'}</span><div class="account"><div class="notifications"><button id="bell" class="bell" aria-label="Notificaciones" aria-expanded="false">🔔<span id="bell-count" class="bell-count" hidden></span></button><div id="notification-panel" class="notification-panel" hidden></div></div><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : state.page === 'training' ? 'Capacitación en Scrum' : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : state.page === 'training' ? 'Aprende el marco de trabajo y cómo usarlo en MySCruEm.' : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.page === 'projects' && state.user.role === 'Product Owner' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
+  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><img src="/logo.png" alt="Logo de MySCruEm"><strong>MySCruEm</strong></div><div class="workspace"><small>EMPRESA</small><strong>${escape(state.company.name)}</strong><span>${escape(state.company.code)}</span></div><nav aria-label="Navegación principal"><button data-page="panel" class="${state.page === 'panel' ? 'selected' : ''}"><span>◉</span> Mi panel</button><button data-page="projects" class="${state.page === 'projects' ? 'selected' : ''}"><span>▦</span> Proyectos</button>${active.length ? `<div class="nav-group"><small>PROYECTO ACTUAL</small><select id="current-project" aria-label="Proyecto actual">${active.map(project => `<option value="${project.id}" ${project.id === current?.id ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></div>${navItems.filter(item => item[3].includes(state.user.role)).map(([key, icon, label]) => `<button data-nav="${key}"><span>${icon}</span> ${label}</button>`).join('')}` : ''}<div class="nav-group"><small>APRENDIZAJE</small></div><button data-page="training" class="${state.page === 'training' ? 'selected' : ''}"><span>✎</span> Capacitación</button>${state.user.role === 'Scrum Master' ? `<div class="nav-group"><small>EQUIPO</small></div><button data-page="teams" class="${state.page === 'teams' ? 'selected' : ''}"><span>♙</span> Equipos</button>` : ''}${isAdmin ? `<div class="nav-group"><small>ADMINISTRACIÓN</small></div><button data-page="users" class="${state.page === 'users' ? 'selected' : ''}"><span>♧</span> Usuarios y roles</button>` : ''}</nav><div class="sidebar-bottom"><span class="status-dot"></span> Espacio de trabajo</div></aside><div class="main"><header><span class="breadcrumb">${escape(state.company.name)} <span>/</span> ${state.page === 'users' ? 'Administración' : state.page === 'teams' ? 'Equipos' : state.page === 'training' ? 'Capacitación' : state.page === 'panel' ? 'Mi panel' : 'Proyectos'}</span><div class="account"><div class="notifications"><button id="bell" class="bell" aria-label="Notificaciones" aria-expanded="false">🔔<span id="bell-count" class="bell-count" hidden></span></button><div id="notification-panel" class="notification-panel" hidden></div></div><div class="avatar">${escape(state.user.name.slice(0, 1).toUpperCase())}</div><div><strong>${escape(state.user.name)}</strong><small>${escape(state.user.role)}</small></div><button id="logout" class="quiet">Salir</button></div></header><main class="content"><div class="page-heading"><div><span class="eyebrow">ESPACIO DE TRABAJO</span><h1>${state.page === 'users' ? 'Usuarios y roles' : state.page === 'teams' ? 'Equipos' : state.page === 'training' ? 'Capacitación en Scrum' : state.page === 'panel' ? escape(panels[state.user.role].title) : 'Tus proyectos'}</h1><p class="muted">${state.page === 'users' ? 'Administra los accesos y las responsabilidades de tu empresa.' : state.page === 'teams' ? 'Cada equipo necesita al menos un Scrum Master, un Product Owner y un Developer.' : state.page === 'training' ? 'Aprende el marco de trabajo y cómo usarlo en MySCruEm.' : state.page === 'panel' ? escape(panels[state.user.role].text) : 'Un lugar para organizar cada nuevo producto.'}</p></div>${state.page === 'users' ? '<button id="new-user" class="primary">+ Invitar usuario</button>' : state.page === 'projects' ? '<button id="new-project" class="primary">+ Nuevo proyecto</button>' : ''}</div><div id="page-content"></div></main></div></div>`;
   document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => { state.page = button.dataset.page; state.query = ''; render(); });
   document.querySelectorAll('[data-nav]').forEach(button => button.onclick = () => openNav(button.dataset.nav));
   document.querySelector('#current-project')?.addEventListener('change', event => { state.currentProject = Number(event.target.value); });
   setupNotifications();
   document.querySelector('#logout').onclick = async () => {
-    try { await api('/logout', 'POST'); state = { page: 'projects', filter: 'active', query: '' }; authView(); }
+    try { await api('/logout', 'POST'); state = { page: 'panel', filter: 'active', query: '' }; authView(); }
     catch (error) { flash(error.message); }
   };
   document.querySelector('#new-user')?.addEventListener('click', () => userDialog());
@@ -161,19 +169,28 @@ function rememberProject(id) {
   const select = document.querySelector('#current-project');
   if (select && [...select.options].some(option => option.value === String(id))) select.value = String(id);
 }
+function renderPanel() {
+  const panel = panels[state.user.role];
+  const project = currentProject();
+  const target = document.querySelector('#page-content');
+  target.innerHTML = `<p class="muted">${project ? `Proyecto actual: <strong>${escape(project.name)}</strong>` : 'Todavía no hay proyectos activos.'}</p><div class="panel-grid">${panel.actions.map(([action, icon, label, text]) => `<button class="panel-card" data-panel="${action}"><span>${icon}</span><strong>${escape(label)}</strong><small>${escape(text)}</small></button>`).join('')}</div>`;
+  document.querySelectorAll('[data-panel]').forEach(button => button.onclick = () => {
+    const [kind, key] = button.dataset.panel.split(':');
+    if (kind === 'page') { state.page = key; state.query = ''; render(); }
+    else openNav(key);
+  });
+}
 function renderContent() {
+  if (state.page === 'panel') return renderPanel();
   if (state.page === 'training') return renderTraining();
+  if (state.page === 'teams') { document.querySelector('#page-content').innerHTML = ''; return renderTeams(); }
   const users = state.page === 'users';
   const source = users ? state.users : state.projects;
   const items = source.filter(item => (users || (state.filter === 'archived' ? item.archived : !item.archived)) && `${item.name} ${item.email || item.description}`.toLowerCase().includes(state.query.toLowerCase()));
   const target = document.querySelector('#page-content');
   target.innerHTML = `<div class="toolbar">${users ? `<span>${state.users.length} usuarios en la empresa</span>` : `<div class="tabs"><button data-filter="active" class="${state.filter === 'active' ? 'active' : ''}">Activos <span>${state.projects.filter(p => !p.archived).length}</span></button><button data-filter="archived" class="${state.filter === 'archived' ? 'active' : ''}">Archivados <span>${state.projects.filter(p => p.archived).length}</span></button></div>`}<input id="search" aria-label="${users ? 'Buscar usuarios' : 'Buscar proyectos'}" placeholder="${users ? 'Buscar por nombre o correo…' : 'Buscar proyectos…'}" value="${escape(state.query)}"></div>
-  ${!items.length ? `<section class="empty"><div class="empty-icon">${users ? '♧' : '▦'}</div><h2>${state.query ? 'No encontramos coincidencias' : users ? 'No hay usuarios' : state.filter === 'archived' ? 'No hay proyectos archivados' : 'Aquí comienza tu próximo proyecto'}</h2><p>${state.query ? 'Prueba con otro nombre.' : users ? 'Invita a una persona para empezar.' : state.filter === 'archived' ? 'Los proyectos que archives seguirán disponibles aquí.' : state.user.role === 'Product Owner' ? 'Crea tu primer proyecto y dale un espacio a tus ideas.' : state.user.role === 'Administrador' ? 'Invita a un Product Owner para que cree el primer proyecto.' : 'Los proyectos de tu empresa aparecerán aquí.'}</p></section>` : users ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${items.map(user => `<tr><td><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></td><td>${escape(user.role)}</td><td>${badge(user.status, user.status === 'Activo' ? 'green' : '')}</td><td><button class="quiet" data-user="${user.id}">Editar</button>${user.status === 'Pendiente' ? `<button class="quiet" data-invite="${user.id}">Invitación</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="project-grid">${items.map(p => `<article class="project-card"><div class="card-top"><div class="project-icon">▦</div>${badge(p.archived ? 'Archivado' : 'Activo', p.archived ? '' : 'green')}</div><h2>${escape(p.name)}</h2><p>${escape(p.description)}</p><div class="project-owner"><div class="avatar">${escape(p.owner.slice(0, 1))}</div><div><small>PRODUCT OWNER</small><strong>${escape(p.owner)}</strong></div></div><div class="card-footer"><small>${new Date(p.created_at + 'Z').toLocaleDateString('es-MX')}</small><div><button class="quiet" data-board="${p.id}">Tablero</button><button class="quiet" data-sprints="${p.id}">Sprints</button><button class="quiet" data-backlog="${p.id}">Historias</button><button class="quiet" data-project="${p.id}">Ver proyecto →</button></div></div></article>`).join('')}</div>`}`;
-  if (users) {
-    target.insertAdjacentHTML('beforeend', `<section class="teams"><div class="teams-heading"><div><h2>Equipos</h2><p class="muted">Organiza a las personas por proyecto. Los Developers del equipo serán los responsables disponibles en su tablero.</p></div><button id="new-team" class="primary">+ Nuevo equipo</button></div>${state.teams.length ? `<div class="team-grid">${state.teams.map(team => `<article class="team-card"><div class="card-top"><h3>${escape(team.name)}</h3><button class="quiet" data-team="${team.id}">Editar</button></div><p class="muted">${team.project ? `Proyecto: ${escape(team.project)}` : 'Sin proyecto asignado'}</p><div class="team-members">${team.members.map(member => `<span class="chip">${escape(member.name)} · ${escape(member.role)}</span>`).join('') || '<span class="muted">Sin integrantes</span>'}</div></article>`).join('')}</div>` : '<p class="muted">Todavía no hay equipos.</p>'}</section>`);
-    document.querySelector('#new-team').onclick = () => teamDialog();
-    document.querySelectorAll('[data-team]').forEach(button => button.onclick = () => teamDialog(state.teams.find(team => team.id === Number(button.dataset.team))));
-  }
+  ${!items.length ? `<section class="empty"><div class="empty-icon">${users ? '♧' : '▦'}</div><h2>${state.query ? 'No encontramos coincidencias' : users ? 'No hay usuarios' : state.filter === 'archived' ? 'No hay proyectos archivados' : 'Aquí comienza tu próximo proyecto'}</h2><p>${state.query ? 'Prueba con otro nombre.' : users ? 'Invita a una persona para empezar.' : state.filter === 'archived' ? 'Los proyectos que archives seguirán disponibles aquí.' : 'Crea tu primer proyecto y dale un espacio a tus ideas.'}</p></section>` : users ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${items.map(user => `<tr><td><strong>${escape(user.name)}</strong><small>${escape(user.email)}</small></td><td>${escape(user.role)}</td><td>${badge(user.status, user.status === 'Activo' ? 'green' : '')}</td><td><button class="quiet" data-user="${user.id}">Editar</button>${user.status === 'Pendiente' ? `<button class="quiet" data-invite="${user.id}">Invitación</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="project-grid">${items.map(p => `<article class="project-card"><div class="card-top"><div class="project-icon">▦</div>${badge(p.archived ? 'Archivado' : 'Activo', p.archived ? '' : 'green')}</div><h2>${escape(p.name)}</h2><p>${escape(p.description)}</p><div class="project-owner"><div class="avatar">${escape(p.owner.slice(0, 1))}</div><div><small>PRODUCT OWNER</small><strong>${escape(p.owner)}</strong></div></div><div class="card-footer"><small>${new Date(p.created_at + 'Z').toLocaleDateString('es-MX')}</small><div><button class="quiet" data-board="${p.id}">Tablero</button><button class="quiet" data-sprints="${p.id}">Sprints</button><button class="quiet" data-backlog="${p.id}">Historias</button><button class="quiet" data-project="${p.id}">Ver proyecto →</button>${p.created_by === state.user.id || state.user.role === 'Product Owner' && p.owner_id === state.user.id ? `<button class="quiet danger" data-delete-project="${p.id}">Eliminar</button>` : ''}</div></div></article>`).join('')}</div>`}`;
+  if (users) renderTeams();
   document.querySelector('#search').oninput = event => {
     const position = event.target.selectionStart;
     state.query = event.target.value;
@@ -186,9 +203,15 @@ function renderContent() {
   document.querySelectorAll('[data-user]').forEach(button => button.onclick = () => userDialog(state.users.find(u => u.id === Number(button.dataset.user))));
   document.querySelectorAll('[data-invite]').forEach(button => button.onclick = () => invitation(Number(button.dataset.invite)));
   document.querySelectorAll('[data-project]').forEach(button => button.onclick = () => projectDialog(state.projects.find(p => p.id === Number(button.dataset.project))));
+  document.querySelectorAll('[data-delete-project]').forEach(button => button.onclick = () => deleteProjectDialog(state.projects.find(p => p.id === Number(button.dataset.deleteProject))));
   document.querySelectorAll('[data-backlog]').forEach(button => button.onclick = () => { rememberProject(button.dataset.backlog); storiesDialog(state.projects.find(p => p.id === Number(button.dataset.backlog))); });
   document.querySelectorAll('[data-sprints]').forEach(button => button.onclick = () => { rememberProject(button.dataset.sprints); sprintsDialog(state.projects.find(p => p.id === Number(button.dataset.sprints))); });
   document.querySelectorAll('[data-board]').forEach(button => button.onclick = () => { rememberProject(button.dataset.board); boardDialog(state.projects.find(p => p.id === Number(button.dataset.board))); });
+}
+function renderTeams() {
+  document.querySelector('#page-content').insertAdjacentHTML('beforeend', `<section class="teams"><div class="teams-heading"><div><h2>Equipos</h2><p class="muted">Organiza a las personas por proyecto. Los Developers del equipo serán los responsables disponibles en su tablero.</p></div><button id="new-team" class="primary">+ Nuevo equipo</button></div>${state.teams.length ? `<div class="team-grid">${state.teams.map(team => `<article class="team-card"><div class="card-top"><h3>${escape(team.name)}</h3><button class="quiet" data-team="${team.id}">Editar</button></div><p class="muted">${team.project ? `Proyecto: ${escape(team.project)}` : 'Sin proyecto asignado'}</p><div class="team-members">${team.members.map(member => `<span class="chip">${escape(member.name)} · ${escape(member.role)}</span>`).join('') || '<span class="muted">Sin integrantes</span>'}</div></article>`).join('')}</div>` : '<p class="muted">Todavía no hay equipos.</p>'}</section>`);
+  document.querySelector('#new-team').onclick = () => teamDialog();
+  document.querySelectorAll('[data-team]').forEach(button => button.onclick = () => teamDialog(state.teams.find(team => team.id === Number(button.dataset.team))));
 }
 function dialog(title, content, onSubmit) {
   modal.className = '';
@@ -232,7 +255,7 @@ function userDialog(user) {
 function projectDialog(project) {
   const editable = !project || state.user.role === 'Product Owner' && project.owner_id === state.user.id;
   if (editable) {
-    dialog(project ? 'Editar proyecto' : 'Nuevo proyecto', `<form>${field('Nombre del proyecto', 'name', 'text', project?.name, 'maxlength="120"')}<label>Descripción<textarea name="description" required maxlength="2000" rows="5">${escape(project?.description || '')}</textarea></label>${project ? `<label>Estado<select name="archived"><option value="false" ${!project.archived ? 'selected' : ''}>Activo</option><option value="true" ${project.archived ? 'selected' : ''}>Archivado</option></select></label>` : '<p class="muted">Serás el Product Owner de este proyecto.</p>'}<p class="form-error" role="alert"></p><button type="submit" class="primary">${project ? 'Guardar cambios' : 'Crear proyecto'}</button></form>`, async data => {
+    dialog(project ? 'Editar proyecto' : 'Nuevo proyecto', `<form>${field('Nombre del proyecto', 'name', 'text', project?.name, 'maxlength="120"')}<label>Descripción<textarea name="description" required maxlength="2000" rows="5">${escape(project?.description || '')}</textarea></label>${project ? `<label>Estado<select name="archived"><option value="false" ${!project.archived ? 'selected' : ''}>Activo</option><option value="true" ${project.archived ? 'selected' : ''}>Archivado</option></select></label>` : `<p class="muted">${state.user.role === 'Product Owner' ? 'Serás el Product Owner de este proyecto.' : 'Quedarás como responsable hasta que el Administrador asigne un Product Owner.'}</p>`}<p class="form-error" role="alert"></p><button type="submit" class="primary">${project ? 'Guardar cambios' : 'Crear proyecto'}</button></form>`, async data => {
       await api(project ? `/projects/${project.id}` : '/projects', project ? 'PATCH' : 'POST', { ...data, archived: data.archived === 'true' });
       modal.close(); await load(); flash(project ? 'Proyecto actualizado.' : 'Proyecto creado.');
     });
@@ -243,28 +266,63 @@ function projectDialog(project) {
     } : undefined);
   }
 }
+function deleteProjectDialog(project) {
+  dialog('Eliminar proyecto', `<p>¿Seguro que quieres eliminar <strong>${escape(project.name)}</strong>?</p><p class="muted">Se borrarán sus historias, épicas, sprints, tareas, reuniones e impedimentos. Esta acción no se puede deshacer.</p><div class="story-actions"><button id="cancel-delete" class="quiet">Cancelar</button><button id="confirm-delete" class="primary danger-button">Eliminar proyecto</button></div>`);
+  document.querySelector('#cancel-delete').onclick = () => modal.close();
+  document.querySelector('#confirm-delete').onclick = async event => {
+    event.target.disabled = true;
+    try {
+      await api(`/projects/${project.id}`, 'DELETE');
+      modal.close();
+      if (state.currentProject === project.id) state.currentProject = null;
+      await load();
+      flash('Proyecto eliminado.');
+    } catch (error) { event.target.disabled = false; flash(error.message); }
+  };
+}
 async function storiesDialog(project) {
   try {
     const [stories, epics] = await Promise.all([api(`/projects/${project.id}/stories`), api(`/projects/${project.id}/epics`)]);
     const canCreate = !project.archived && state.user.role === 'Product Owner' && project.owner_id === state.user.id;
+    const canEpics = !project.archived && state.user.role === 'Scrum Master';
+    const canCheck = !project.archived && (state.user.role === 'Developer' || canCreate);
     const grouped = Boolean(state.groupEpics) && epics.length > 0;
-    const epicName = new Map(epics.map(epic => [epic.id, epic.name]));
-    const epicControl = story => canCreate ? `<label class="epic-select">Épica<select data-epic="${story.id}"><option value="">Sin épica</option>${epics.map(epic => `<option value="${epic.id}" ${story.epic_id === epic.id ? 'selected' : ''}>${escape(epic.name)}</option>`).join('')}</select></label>` : story.epic_id ? `<span class="chip">Épica: ${escape(epicName.get(story.epic_id))}</span>` : '';
-    const storyCard = story => `<article class="story" data-story="${story.id}" draggable="${canCreate && !grouped}"><div class="story-toolbar"><small>HU-${story.id}</small>${canCreate && !grouped ? `<div><button class="quiet" data-move="${story.id}" data-direction="-1" aria-label="Subir ${escape(story.title)}" ${stories[0].id === story.id ? 'disabled' : ''}>↑</button><button class="quiet" data-move="${story.id}" data-direction="1" aria-label="Bajar ${escape(story.title)}" ${stories.at(-1).id === story.id ? 'disabled' : ''}>↓</button></div>` : ''}</div><div class="story-priority">${canCreate ? `<select aria-label="Prioridad de ${escape(story.title)}" data-priority="${story.id}">${['Must have','Should have','Could have','Won’t have'].map(priority => `<option ${story.priority === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select>` : badge(story.priority)}</div><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><div class="story-points"><span>Puntos de historia</span>${state.user.role === 'Developer' && !project.archived ? `<select aria-label="Puntos de ${escape(story.title)}" data-estimate="${story.id}"><option value="" disabled ${story.points == null ? 'selected' : ''}>Sin estimar</option>${[1,2,3,5,8,13,21].map(points => `<option value="${points}" ${story.points === points ? 'selected' : ''}>${points}</option>`).join('')}</select>` : `<strong>${story.points ?? 'Sin estimar'}</strong>`}</div>${epicControl(story)}<button class="quiet story-tasks" data-story-tasks="${story.id}">Ver tareas y avance</button><strong>Criterios de aceptación</strong><ul>${story.criteria.map(criterion => `<li>${escape(criterion)}</li>`).join('')}</ul></article>`;
-    const groups = [...epics.map(epic => ({ title: epic.name, description: epic.description, items: stories.filter(story => story.epic_id === epic.id) })), { title: 'Sin épica', description: '', items: stories.filter(story => !story.epic_id) }].filter(group => group.items.length);
-    const list = grouped ? groups.map(group => `<section class="epic-group"><div class="epic-heading"><h3>${escape(group.title)}</h3><span>${group.items.length} historias · ${group.items.reduce((sum, story) => sum + (story.points || 0), 0)} puntos</span></div>${group.description ? `<p class="muted">${escape(group.description)}</p>` : ''}<div class="story-list">${group.items.map(storyCard).join('')}</div></section>`).join('') : `<div class="story-list">${stories.map(storyCard).join('')}</div>`;
-    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'} · ${epics.length} ${epics.length === 1 ? 'épica' : 'épicas'}</p><div class="backlog-tools">${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button><button id="manage-epics" class="quiet">Épicas</button>' : ''}<button id="show-dod" class="quiet">Definition of Done</button>${epics.length ? `<label class="check"><input type="checkbox" id="group-epics" ${grouped ? 'checked' : ''}> Agrupar por épica</label>` : ''}</div>${stories.length ? list : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
+    const epicById = new Map(epics.map(epic => [epic.id, epic]));
+    const epicControl = story => canCreate ? `<label class="epic-select">Épica<select data-epic="${story.id}">${story.epic_id ? '' : '<option value="">Sin épica</option>'}${epics.map(epic => `<option value="${epic.id}" ${story.epic_id === epic.id ? 'selected' : ''}>${escape(epic.name)}</option>`).join('')}</select></label>` : story.epic_id ? `<span class="chip epic-chip" style="--epic:${escape(epicById.get(story.epic_id)?.color)}">Épica: ${escape(epicById.get(story.epic_id)?.name)}</span>` : '';
+    const storyCard = story => `<article class="story" data-story="${story.id}" draggable="${canCreate && !grouped}"><div class="story-toolbar"><small>HU-${story.id}</small>${canCreate && !grouped ? `<div><button class="quiet" data-move="${story.id}" data-direction="-1" aria-label="Subir ${escape(story.title)}" ${stories[0].id === story.id ? 'disabled' : ''}>↑</button><button class="quiet" data-move="${story.id}" data-direction="1" aria-label="Bajar ${escape(story.title)}" ${stories.at(-1).id === story.id ? 'disabled' : ''}>↓</button></div>` : ''}</div><div class="story-priority">${canCreate ? `<select aria-label="Prioridad de ${escape(story.title)}" data-priority="${story.id}">${['Must have','Should have','Could have','Won’t have'].map(priority => `<option ${story.priority === priority ? 'selected' : ''}>${priority}</option>`).join('')}</select>` : badge(story.priority)}</div><h3>${escape(story.title)}</h3><p>Como ${escape(story.actor)}, quiero ${escape(story.goal)}, para ${escape(story.benefit)}.</p><div class="story-points"><span>Puntos de historia</span>${state.user.role === 'Developer' && !project.archived ? `<select aria-label="Puntos de ${escape(story.title)}" data-estimate="${story.id}"><option value="" disabled ${story.points == null ? 'selected' : ''}>Sin estimar</option>${[1,2,3,5,8,13,21].map(points => `<option value="${points}" ${story.points === points ? 'selected' : ''}>${points}</option>`).join('')}</select>` : `<strong>${story.points ?? 'Sin estimar'}</strong>`}</div>${epicControl(story)}<div class="story-links"><button class="quiet story-tasks" data-story-tasks="${story.id}">Ver tareas y avance</button><button class="quiet" data-story-dod="${story.id}">DoD de la historia</button></div>${canCreate ? `<div class="story-edit"><button class="quiet" data-edit-story="${story.id}">Editar</button>${story.sprint_id ? '' : `<button class="quiet danger" data-delete-story="${story.id}">Eliminar</button>`}</div>` : ''}<strong>Criterios de aceptación <small>${story.criteria_done.length} de ${story.criteria.length}</small></strong><div class="criteria-list">${story.criteria.map((criterion, index) => `<label class="check ${story.criteria_done.includes(index) ? 'done' : ''}"><input type="checkbox" data-criterion="${story.id}:${index}" ${story.criteria_done.includes(index) ? 'checked' : ''} ${canCheck ? '' : 'disabled'}> ${escape(criterion)}</label>`).join('')}</div></article>`;
+    const groups = [...epics.map(epic => ({ title: epic.name, color: epic.color, description: epic.description, items: stories.filter(story => story.epic_id === epic.id) })), { title: 'Sin épica', description: '', items: stories.filter(story => !story.epic_id) }].filter(group => group.items.length);
+    const list = grouped ? groups.map(group => `<section class="epic-group"><div class="epic-heading"><h3>${group.color ? `<span class="epic-dot" style="--epic:${escape(group.color)}"></span>` : ''}${escape(group.title)}</h3><span>${group.items.length} historias · ${group.items.reduce((sum, story) => sum + (story.points || 0), 0)} puntos</span></div>${group.description ? `<p class="muted">${escape(group.description)}</p>` : ''}<div class="story-list">${group.items.map(storyCard).join('')}</div></section>`).join('') : `<div class="story-list">${stories.map(storyCard).join('')}</div>`;
+    dialog('Historias de usuario', `<p class="muted">${escape(project.name)} · ${stories.length} ${stories.length === 1 ? 'historia' : 'historias'} · ${epics.length} ${epics.length === 1 ? 'épica' : 'épicas'}</p><div class="backlog-tools">${canCreate ? '<button id="new-story" class="primary">+ Nueva historia</button>' : ''}${canEpics ? '<button id="manage-epics" class="primary">Épicas</button>' : '<button id="manage-epics" class="quiet">Épicas</button>'}<button id="show-dod" class="quiet">Definition of Done</button>${epics.length ? `<label class="check"><input type="checkbox" id="group-epics" ${grouped ? 'checked' : ''}> Agrupar por épica</label>` : ''}</div>${stories.length ? list : '<p class="muted">Este proyecto todavía no tiene historias de usuario.</p>'}`);
     document.querySelectorAll('[data-story-tasks]').forEach(button => button.onclick = () => storyTasksDialog(project, Number(button.dataset.storyTasks)));
+    document.querySelectorAll('[data-story-dod]').forEach(button => button.onclick = () => dodDialog(project, { kind: 'Historia', id: Number(button.dataset.storyDod) }));
     document.querySelector('#show-dod').onclick = () => dodDialog(project);
-    document.querySelector('#manage-epics')?.addEventListener('click', () => epicsDialog(project, epics));
-    document.querySelector('#group-epics')?.addEventListener('change', event => { state.groupEpics = event.target.checked; storiesDialog(project); });
-    document.querySelectorAll('[data-epic]').forEach(input => input.onchange = async () => {
+    document.querySelector('#manage-epics').onclick = () => epicsDialog(project, epics);
+    document.querySelectorAll('[data-criterion]').forEach(input => input.onchange = async () => {
+      const [storyId, index] = input.dataset.criterion.split(':');
       input.disabled = true;
-      try { await api(`/projects/${project.id}/stories/${input.dataset.epic}/epic`, 'PATCH', { epicId: input.value ? Number(input.value) : null }); }
+      try { await api(`/projects/${project.id}/stories/${storyId}/criteria/${index}`, 'PATCH', { done: input.checked }); }
       catch (error) { flash(error.message); }
       await storiesDialog(project);
     });
-    document.querySelector('#new-story')?.addEventListener('click', () => storyForm(project));
+    document.querySelectorAll('[data-edit-story]').forEach(button => button.onclick = () => storyForm(project, epics, stories.find(story => story.id === Number(button.dataset.editStory))));
+    document.querySelectorAll('[data-delete-story]').forEach(button => button.onclick = () => {
+      const story = stories.find(item => item.id === Number(button.dataset.deleteStory));
+      dialog('Eliminar historia', `<p>¿Seguro que quieres eliminar <strong>${escape(story.title)}</strong> del Product Backlog?</p><div class="story-actions"><button id="back-stories" class="quiet">Cancelar</button><button id="confirm-delete" class="primary danger-button">Eliminar historia</button></div>`);
+      document.querySelector('#back-stories').onclick = () => storiesDialog(project);
+      document.querySelector('#confirm-delete').onclick = async () => {
+        try { await api(`/projects/${project.id}/stories/${story.id}`, 'DELETE'); flash('Historia eliminada.'); }
+        catch (error) { flash(error.message); }
+        await storiesDialog(project);
+      };
+    });
+    document.querySelector('#group-epics')?.addEventListener('change', event => { state.groupEpics = event.target.checked; storiesDialog(project); });
+    document.querySelectorAll('[data-epic]').forEach(input => input.onchange = async () => {
+      input.disabled = true;
+      try { await api(`/projects/${project.id}/stories/${input.dataset.epic}/epic`, 'PATCH', { epicId: Number(input.value) }); }
+      catch (error) { flash(error.message); }
+      await storiesDialog(project);
+    });
+    document.querySelector('#new-story')?.addEventListener('click', () => storyForm(project, epics));
     const saveOrder = async order => {
       try { await api(`/projects/${project.id}/stories/order`, 'PATCH', { order }); }
       catch (error) { flash(error.message); }
@@ -316,21 +374,24 @@ async function storyTasksDialog(project, storyId) {
     document.querySelector('#back-stories').onclick = () => storiesDialog(project);
   } catch (error) { flash(error.message); }
 }
-async function dodDialog(project) {
+async function dodDialog(project, target) {
   try {
-    const dod = await api(`/projects/${project.id}/dod`);
+    const path = target ? `/projects/${project.id}/${target.kind === 'Historia' ? 'stories' : 'sprints'}/${target.id}/dod` : `/projects/${project.id}/dod`;
+    const dod = await api(path);
     const canEdit = !project.archived && state.user.role === 'Product Owner' && project.owner_id === state.user.id;
-    const list = dod.criteria.length ? `<ol class="dod-list">${dod.criteria.map(item => `<li>${escape(item)}</li>`).join('')}</ol><p class="muted">Actualizada por ${escape(dod.updated_by || '—')} el ${escape((dod.updated_at || '').slice(0, 10))}</p>` : '<p class="muted">El proyecto todavía no tiene Definition of Done.</p>';
-    dialog('Definition of Done', `<p class="muted">${escape(project.name)} · Criterios que debe cumplir toda historia para considerarse terminada.</p>${canEdit ? `<form><label>Criterios (uno por línea, máximo 15)<textarea name="criteria" rows="8" maxlength="3200">${escape(dod.criteria.join('\n'))}</textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver al backlog</button><button type="submit" class="primary">Guardar Definition of Done</button></div></form>` : `${list}<div class="story-actions"><button id="back-stories" class="quiet">Volver al backlog</button></div>`}`, async data => {
-      await api(`/projects/${project.id}/dod`, 'PUT', { criteria: data.criteria.split('\n').map(item => item.trim()).filter(Boolean) });
+    const subject = target ? `${target.kind === 'Historia' ? 'la historia' : 'el sprint'} ${dod.name}` : 'el proyecto';
+    const back = target?.kind === 'Sprint' ? 'Volver a sprints' : 'Volver al backlog';
+    const list = dod.criteria.length ? `<ol class="dod-list">${dod.criteria.map(item => `<li>${escape(item)}</li>`).join('')}</ol><p class="muted">Actualizada por ${escape(dod.updated_by || '—')} el ${escape((dod.updated_at || '').slice(0, 10))}</p>` : `<p class="muted">${escape(subject[0].toUpperCase() + subject.slice(1))} todavía no tiene Definition of Done.</p>`;
+    dialog(target ? `Definition of Done · ${target.kind}` : 'Definition of Done', `<p class="muted">${escape(project.name)} · Criterios propios ${escape(subject.replace(/^el /, 'del ').replace(/^la /, 'de la '))}${target ? ', adicionales a los del proyecto' : ' que debe cumplir toda historia para considerarse terminada'}.</p>${canEdit ? `<form><label>Criterios (uno por línea, máximo 15)<textarea name="criteria" rows="8" maxlength="3200">${escape(dod.criteria.join('\n'))}</textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">${back}</button><button type="submit" class="primary">Guardar Definition of Done</button></div></form>` : `${list}<div class="story-actions"><button id="back-stories" class="quiet">${back}</button></div>`}`, async data => {
+      await api(path, 'PUT', { criteria: data.criteria.split('\n').map(item => item.trim()).filter(Boolean) });
       flash('Definition of Done guardada.');
-      await dodDialog(project);
+      await dodDialog(project, target);
     });
-    document.querySelector('#back-stories').onclick = () => storiesDialog(project);
+    document.querySelector('#back-stories').onclick = () => target?.kind === 'Sprint' ? sprintsDialog(project) : storiesDialog(project);
   } catch (error) { flash(error.message); }
 }
 function doneReminder(project, task, criteria) {
-  dialog('Antes de mover a Terminado', `<p class="muted">Tarea: ${escape(task.title)}</p><p>Confirma que el trabajo cumple la Definition of Done del proyecto:</p><div class="dod-check">${criteria.map((item, index) => `<label class="check"><input type="checkbox" data-dod="${index}"> ${escape(item)}</label>`).join('')}</div><p class="form-error" role="alert"></p><div class="story-actions"><button id="cancel-done" class="quiet">Cancelar</button><button id="confirm-done" class="primary">Mover a Terminado</button></div>`);
+  dialog('Antes de mover a Terminado', `<p class="muted">Tarea: ${escape(task.title)}</p><p>Confirma que el trabajo cumple la Definition of Done del proyecto, del sprint y de la historia:</p><div class="dod-check">${criteria.map((item, index) => `<label class="check"><input type="checkbox" data-dod="${index}"> ${escape(item)}</label>`).join('')}</div><p class="form-error" role="alert"></p><div class="story-actions"><button id="cancel-done" class="quiet">Cancelar</button><button id="confirm-done" class="primary">Mover a Terminado</button></div>`);
   document.querySelector('#cancel-done').onclick = () => boardDialog(project);
   document.querySelector('#confirm-done').onclick = async event => {
     if ([...modal.querySelectorAll('[data-dod]')].some(input => !input.checked)) {
@@ -344,28 +405,30 @@ function doneReminder(project, task, criteria) {
   };
 }
 function epicsDialog(project, epics, editing) {
-  dialog('Épicas del proyecto', `<p class="muted">${escape(project.name)}</p>${epics.length ? `<div class="epic-list">${epics.map(epic => `<article class="planning-story"><div><strong>${escape(epic.name)}</strong><small>${epic.stories} historias · ${epic.points} puntos${epic.description ? ` · ${escape(epic.description)}` : ''}</small></div><button class="quiet" data-edit-epic="${epic.id}">Editar</button></article>`).join('')}</div>` : '<p class="muted">Todavía no hay épicas.</p>'}<form><h3>${editing ? 'Editar épica' : 'Nueva épica'}</h3>${field('Nombre', 'name', 'text', editing?.name || '', 'maxlength="120"')}<label>Descripción<textarea name="description" maxlength="1000" rows="2" placeholder="Opcional">${escape(editing?.description || '')}</textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver al backlog</button><button type="submit" class="primary">Guardar épica</button></div></form>`, async data => {
+  const canEdit = !project.archived && state.user.role === 'Scrum Master';
+  dialog('Épicas del proyecto', `<p class="muted">${escape(project.name)}</p>${epics.length ? `<div class="epic-list">${epics.map(epic => `<article class="planning-story"><div><strong><span class="epic-dot" style="--epic:${escape(epic.color)}"></span>${escape(epic.name)}</strong><small>${epic.stories} historias · ${epic.points} puntos${epic.description ? ` · ${escape(epic.description)}` : ''}</small></div>${canEdit ? `<button class="quiet" data-edit-epic="${epic.id}">Editar</button>` : ''}</article>`).join('')}</div>` : '<p class="muted">Todavía no hay épicas.</p>'}${canEdit ? `<form><h3>${editing ? 'Editar épica' : 'Nueva épica'}</h3>${field('Nombre', 'name', 'text', editing?.name || '', 'maxlength="120"')}<label>Descripción<textarea name="description" required maxlength="1000" rows="2">${escape(editing?.description || '')}</textarea></label><label class="color-field">Color<input type="color" name="color" value="${escape(editing?.color || '#254e80')}" required></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver al backlog</button><button type="submit" class="primary">Guardar épica</button></div></form>` : '<p class="muted">Solo el Scrum Master crea y edita épicas.</p><div class="story-actions"><button id="back-stories" class="quiet">Volver al backlog</button></div>'}`, canEdit ? async data => {
     await api(editing ? `/projects/${project.id}/epics/${editing.id}` : `/projects/${project.id}/epics`, editing ? 'PATCH' : 'POST', data);
     flash(editing ? 'Épica actualizada.' : 'Épica creada.');
     epicsDialog(project, await api(`/projects/${project.id}/epics`));
-  });
+  } : undefined);
   document.querySelector('#back-stories').onclick = () => storiesDialog(project);
   document.querySelectorAll('[data-edit-epic]').forEach(button => button.onclick = () => epicsDialog(project, epics, epics.find(epic => epic.id === Number(button.dataset.editEpic))));
 }
-function storyForm(project) {
-  dialog('Nueva historia de usuario', `<form>${field('Título', 'title', 'text', '', 'maxlength="120"')}${field('Como', 'actor', 'text', '', 'maxlength="300"')}${field('Quiero', 'goal', 'text', '', 'maxlength="1000"')}${field('Para', 'benefit', 'text', '', 'maxlength="1000"')}<label>Criterios de aceptación<textarea name="criteria" required rows="4" maxlength="15000" placeholder="Escribe un criterio por línea"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver</button><button type="submit" class="primary">Guardar historia</button></div></form>`, async data => {
-    await api(`/projects/${project.id}/stories`, 'POST', { ...data, criteria: data.criteria.split(/\r?\n/).map(value => value.trim()).filter(Boolean) });
+function storyForm(project, epics, story) {
+  dialog(story ? 'Editar historia de usuario' : 'Nueva historia de usuario', `<form>${field('Título', 'title', 'text', story?.title || '', 'maxlength="120"')}${field('Como', 'actor', 'text', story?.actor || '', 'maxlength="300"')}${field('Quiero', 'goal', 'text', story?.goal || '', 'maxlength="1000"')}${field('Para', 'benefit', 'text', story?.benefit || '', 'maxlength="1000"')}<label>Épica<select name="epicId" required><option value="">Selecciona una épica</option>${epics.map(epic => `<option value="${epic.id}" ${story?.epic_id === epic.id ? 'selected' : ''}>${escape(epic.name)}</option>`).join('')}</select></label>${epics.length ? '' : '<p class="muted">El proyecto no tiene épicas. Pide al Scrum Master que cree una.</p>'}<label>Criterios de aceptación<textarea name="criteria" required rows="4" maxlength="15000" placeholder="Escribe un criterio por línea">${escape(story?.criteria.join('\n') || '')}</textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-stories" class="quiet">Volver</button><button type="submit" class="primary">Guardar historia</button></div></form>`, async data => {
+    await api(story ? `/projects/${project.id}/stories/${story.id}` : `/projects/${project.id}/stories`, story ? 'PATCH' : 'POST', { ...data, epicId: Number(data.epicId), criteria: data.criteria.split(/\r?\n/).map(value => value.trim()).filter(Boolean) });
     await storiesDialog(project);
-    flash('Historia creada.');
+    flash(story ? 'Historia actualizada.' : 'Historia creada.');
   });
   document.querySelector('#back-stories').onclick = () => storiesDialog(project);
 }
 async function sprintsDialog(project) {
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
-    dialog('Sprints del proyecto', `<p class="muted">${escape(project.name)}</p>${state.user.role === 'Scrum Master' && !project.archived ? '<button id="new-sprint" class="primary">+ Nuevo sprint</button>' : ''}${sprints.length ? `<div class="story-list">${sprints.map(sprint => `<article class="story"><h3>${escape(sprint.name)}</h3>${badge(sprint.status)}<p>${escape(sprint.start_date)} al ${escape(sprint.end_date)}</p><p class="project-description">${escape(sprint.goal)}</p>${sprint.status === 'Cerrado' ? `<p class="muted">Completados ${sprint.completed_points ?? 0} de ${sprint.committed_points ?? 0} puntos</p>` : ''}<div class="sprint-actions"><button class="quiet" data-metrics="${sprint.id}">Métricas</button><button class="quiet" data-meetings="${sprint.id}">Actas</button><button class="quiet" data-plan="${sprint.id}">${state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación' ? 'Planificar' : 'Ver historias'}</button>${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'En planificación' ? `<button class="primary" data-start="${sprint.id}">Iniciar sprint</button>` : ''}${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'Activo' ? `<button class="primary" data-close="${sprint.id}">Cerrar sprint</button>` : ''}</div></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene sprints.</p>'}`);
+    dialog('Sprints del proyecto', `<p class="muted">${escape(project.name)}</p>${state.user.role === 'Scrum Master' && !project.archived ? '<button id="new-sprint" class="primary">+ Nuevo sprint</button>' : ''}${sprints.length ? `<div class="story-list">${sprints.map(sprint => `<article class="story"><h3>${escape(sprint.name)}</h3>${badge(sprint.status)}<p>${escape(sprint.start_date)} al ${escape(sprint.end_date)}</p><p class="project-description">${escape(sprint.goal)}</p>${sprint.status === 'Cerrado' ? `<p class="muted">Completados ${sprint.completed_points ?? 0} de ${sprint.committed_points ?? 0} puntos</p>` : ''}<div class="sprint-actions"><button class="quiet" data-metrics="${sprint.id}">Métricas</button><button class="quiet" data-meetings="${sprint.id}">Actas</button><button class="quiet" data-sprint-dod="${sprint.id}">DoD</button><button class="quiet" data-plan="${sprint.id}">${state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación' ? 'Planificar' : 'Ver historias'}</button>${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'En planificación' ? `<button class="primary" data-start="${sprint.id}">Iniciar sprint</button>` : ''}${state.user.role === 'Scrum Master' && !project.archived && sprint.status === 'Activo' ? `<button class="primary" data-close="${sprint.id}">Cerrar sprint</button>` : ''}</div></article>`).join('')}</div>` : '<p class="muted">Este proyecto todavía no tiene sprints.</p>'}`);
     document.querySelector('#new-sprint')?.addEventListener('click', () => sprintForm(project));
     document.querySelectorAll('[data-plan]').forEach(button => button.onclick = () => planningDialog(project, sprints.find(sprint => sprint.id === Number(button.dataset.plan))));
+    document.querySelectorAll('[data-sprint-dod]').forEach(button => button.onclick = () => dodDialog(project, { kind: 'Sprint', id: Number(button.dataset.sprintDod) }));
     document.querySelectorAll('[data-meetings]').forEach(button => button.onclick = () => meetingsDialog(project, sprints.find(sprint => sprint.id === Number(button.dataset.meetings))));
     document.querySelectorAll('[data-metrics]').forEach(button => button.onclick = () => burndownDialog(project, Number(button.dataset.metrics), 'sprints'));
     document.querySelectorAll('[data-start]').forEach(button => button.onclick = async () => {
@@ -508,9 +571,13 @@ async function boardDialog(project) {
           area.classList.remove('drop-target');
           const task = board.tasks.find(item => item.id === Number(dragged?.dataset.task));
           if (!task || task.status === area.dataset.column) return;
-          if (area.dataset.column === 'Terminado' && dod.criteria.length) {
-            clearInterval(boardTimer);
-            return doneReminder(project, task, dod.criteria);
+          if (area.dataset.column === 'Terminado') {
+            const [sprintDod, storyDod] = await Promise.all([api(`/projects/${project.id}/sprints/${board.sprint.id}/dod`), api(`/projects/${project.id}/stories/${task.story_id}/dod`)]);
+            const criteria = [...new Set([...dod.criteria, ...sprintDod.criteria, ...storyDod.criteria])];
+            if (criteria.length) {
+              clearInterval(boardTimer);
+              return doneReminder(project, task, criteria);
+            }
           }
           area.querySelector('.board-cards').append(dragged);
           try { await api(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status: area.dataset.column }); }

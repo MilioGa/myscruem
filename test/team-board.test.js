@@ -16,10 +16,13 @@ test('Los responsables del tablero se limitan al equipo del proyecto', async () 
     await f.master(`${sprints}/${sprint.id}/start`, 'POST');
     const board = `/projects/${f.project.id}/board`;
     assert.deepEqual((await f.developer(board)).members.map(member => member.name), ['developer', 'segundo']);
-    await f.admin('/teams', 'POST', { name: 'Equipo Portal', projectId: f.project.id, memberIds: [second.id] }, 201);
-    assert.deepEqual((await f.developer(board)).members.map(member => member.name), ['segundo']);
+    const third = await f.admin('/users', 'POST', { name: 'tercero', email: 'tercero@example.com', role: 'Developer' }, 201);
+    f.db.prepare("UPDATE users SET status='Activo' WHERE id=?").run(third.id);
+    await f.admin('/teams', 'POST', { name: 'Equipo Portal', projectId: f.project.id, memberIds: [second.id, developerId, (await f.admin('/users')).find(user => user.name === 'master').id, (await f.admin('/users')).find(user => user.name === 'owner').id] }, 201);
+    assert.deepEqual((await f.developer(board)).members.map(member => member.name), ['developer', 'segundo']);
+    await f.otherOwner(board, 'GET', undefined, 404);
     const tasks = `/projects/${f.project.id}/tasks`;
-    await f.developer(tasks, 'POST', { title: 'Fuera del equipo', storyId: story.id, assigneeId: developerId }, 400);
+    await f.developer(tasks, 'POST', { title: 'Fuera del equipo', storyId: story.id, assigneeId: third.id }, 400);
     await f.developer(tasks, 'POST', { title: 'Dentro del equipo', storyId: story.id, assigneeId: second.id }, 201);
   } finally { await f.close(); }
 });

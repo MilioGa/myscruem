@@ -7,7 +7,9 @@ test('Burndown con línea ideal, línea real y permisos', async () => {
   const f = await setup({ now: () => current });
   try {
     const a = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.accept(a.id);
     const b = await f.owner(f.stories, 'POST', { ...f.story, title: 'Consulta' }, 201);
+    await f.accept(b.id);
     await f.developer(`${f.stories}/${a.id}/estimate`, 'PATCH', { points: 8 });
     await f.developer(`${f.stories}/${b.id}/estimate`, 'PATCH', { points: 5 });
     const sprints = `/projects/${f.project.id}/sprints`;

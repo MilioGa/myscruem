@@ -6,6 +6,7 @@ test('Mover tarjetas guarda el estado, avisa del cambio y respeta permisos', asy
   const f = await setup();
   try {
     const story = await f.owner(f.stories, 'POST', f.story, 201);
+    await f.accept(story.id);
     await f.developer(`${f.stories}/${story.id}/estimate`, 'PATCH', { points: 5 });
     const sprints = `/projects/${f.project.id}/sprints`;
     const sprint = await f.master(sprints, 'POST', { name: 'Sprint 3', startDate: '2026-10-28', endDate: '2026-11-03', goal: 'Tablero' }, 201);
