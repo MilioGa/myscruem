@@ -39,3 +39,4 @@
 .quiet.danger{color:#b84438}.quiet.danger:hover{background:#fbeeec}.primary.danger-button{background:#b84438}.primary.danger-button:hover{background:#963329}
 .epic-dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--epic);margin-right:8px;vertical-align:middle}.epic-chip{border-left:4px solid var(--epic)}.story-edit{display:flex;gap:6px}.color-field input{height:46px;padding:4px;width:90px}
 .criteria-list{display:grid;gap:4px;margin-top:8px}.criteria-list .check{margin:0;font-weight:500}.criteria-list .done{color:#2f7a5b}
+.story-links{display:flex;gap:6px;flex-wrap:wrap}

@@ -85,6 +85,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
   `);
   db.exec('CREATE TABLE IF NOT EXISTS definition_of_done (project_id INTEGER PRIMARY KEY REFERENCES projects(id), criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+  db.exec("CREATE TABLE IF NOT EXISTS scoped_dod (scope TEXT NOT NULL CHECK(scope IN ('Historia','Sprint')), ref_id INTEGER NOT NULL, criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(scope,ref_id))");
   db.exec(`
     CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), actor_id INTEGER REFERENCES users(id), project_id INTEGER REFERENCES projects(id), task_id INTEGER REFERENCES tasks(id), kind TEXT NOT NULL, message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS notifications_by_user ON notifications(user_id,read,id);
@@ -272,6 +273,8 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     `DELETE FROM meetings WHERE sprint_id IN (${projectSprints})`,
     `DELETE FROM burndown WHERE sprint_id IN (${projectSprints})`,
     `DELETE FROM sprint_stories WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM scoped_dod WHERE scope='Sprint' AND ref_id IN (${projectSprints})`,
+    "DELETE FROM scoped_dod WHERE scope='Historia' AND ref_id IN (SELECT id FROM stories WHERE project_id=?)",
     'DELETE FROM sprints WHERE project_id=?',
     'DELETE FROM stories WHERE project_id=?',
     'DELETE FROM epics WHERE project_id=?',
@@ -390,7 +393,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
     if (!story) fail('Historia no encontrada.', 404);
     if (get('SELECT story_id FROM sprint_stories WHERE story_id=?', story.id) || get('SELECT id FROM tasks WHERE story_id=?', story.id)) fail('La historia está en un sprint o tiene tareas; no se puede eliminar.', 409);
-    run('DELETE FROM stories WHERE id=?', story.id);
+    transaction(() => {
+      run("DELETE FROM scoped_dod WHERE scope='Historia' AND ref_id=?", story.id);
+      run('DELETE FROM stories WHERE id=?', story.id);
+    });
     res.json({ ok: true });
   });
   app.get('/api/projects/:id/sprints', auth, (req, res) => {
@@ -740,16 +746,45 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const dod = get('SELECT definition_of_done.criteria,definition_of_done.updated_at,users.name AS updated_by FROM definition_of_done LEFT JOIN users ON users.id=definition_of_done.updated_by WHERE project_id=?', project.id);
     res.json(dod ? { criteria: JSON.parse(dod.criteria), updated_at: dod.updated_at, updated_by: dod.updated_by } : { criteria: [], updated_at: null, updated_by: null });
   });
+  const dodCriteria = req => {
+    if (!Array.isArray(req.body.criteria) || req.body.criteria.length > 15) fail('La Definition of Done admite hasta 15 criterios.');
+    const criteria = req.body.criteria.map(item => text(item, 'Criterio', 200));
+    if (new Set(criteria.map(item => item.toLowerCase())).size !== criteria.length) fail('Los criterios no pueden repetirse.');
+    return criteria;
+  };
   app.put('/api/projects/:id/dod', auth, (req, res) => {
     const project = projectFor(req);
     if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede definir la Definition of Done.', 403);
     if (project.archived) fail('El proyecto está archivado.');
-    if (!Array.isArray(req.body.criteria) || req.body.criteria.length > 15) fail('La Definition of Done admite hasta 15 criterios.');
-    const criteria = req.body.criteria.map(item => text(item, 'Criterio', 200));
-    if (new Set(criteria.map(item => item.toLowerCase())).size !== criteria.length) fail('Los criterios no pueden repetirse.');
+    const criteria = dodCriteria(req);
     run('INSERT INTO definition_of_done(project_id,criteria,updated_by,updated_at) VALUES (?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET criteria=excluded.criteria,updated_by=excluded.updated_by,updated_at=excluded.updated_at', project.id, JSON.stringify(criteria), req.user.id, now().toISOString());
     res.json({ criteria });
   });
+  const scopedTarget = req => {
+    const project = projectFor(req);
+    const [scope, ref] = req.params.storyId
+      ? ['Historia', get('SELECT id,title AS name FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id)]
+      : ['Sprint', get('SELECT id,name FROM sprints WHERE id=? AND project_id=?', Number(req.params.sprintId) || 0, project.id)];
+    if (!ref) fail(scope === 'Historia' ? 'Historia no encontrada.' : 'Sprint no encontrado.', 404);
+    return { project, scope, ref };
+  };
+  const readScoped = (req, res) => {
+    const { scope, ref } = scopedTarget(req);
+    const dod = get('SELECT scoped_dod.criteria,scoped_dod.updated_at,users.name AS updated_by FROM scoped_dod LEFT JOIN users ON users.id=scoped_dod.updated_by WHERE scope=? AND ref_id=?', scope, ref.id);
+    res.json({ scope, name: ref.name, criteria: dod ? JSON.parse(dod.criteria) : [], updated_at: dod?.updated_at ?? null, updated_by: dod?.updated_by ?? null });
+  };
+  const writeScoped = (req, res) => {
+    const { project, scope, ref } = scopedTarget(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede definir la Definition of Done.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const criteria = dodCriteria(req);
+    run('INSERT INTO scoped_dod(scope,ref_id,criteria,updated_by,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(scope,ref_id) DO UPDATE SET criteria=excluded.criteria,updated_by=excluded.updated_by,updated_at=excluded.updated_at', scope, ref.id, JSON.stringify(criteria), req.user.id, now().toISOString());
+    res.json({ criteria });
+  };
+  app.get('/api/projects/:id/stories/:storyId/dod', auth, readScoped);
+  app.put('/api/projects/:id/stories/:storyId/dod', auth, writeScoped);
+  app.get('/api/projects/:id/sprints/:sprintId/dod', auth, readScoped);
+  app.put('/api/projects/:id/sprints/:sprintId/dod', auth, writeScoped);
   app.get('/api/notifications', auth, (req, res) => {
     const unread = get('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0', req.user.id).total;
     const items = all('SELECT notifications.id,notifications.kind,notifications.message,notifications.read,notifications.created_at,notifications.project_id,notifications.task_id,projects.name AS project,actor.name AS actor FROM notifications LEFT JOIN projects ON projects.id=notifications.project_id LEFT JOIN users actor ON actor.id=notifications.actor_id WHERE notifications.user_id=? ORDER BY notifications.id DESC LIMIT 30', req.user.id);
