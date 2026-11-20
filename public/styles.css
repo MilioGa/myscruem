@@ -35,3 +35,4 @@
 .meeting label:has(input:checked){color:#8a94a6;text-decoration:line-through}.notification-panel{box-shadow:0 12px 32px rgba(23,43,77,.18)}.dod-check label:has(input:checked){background:#eef7f1;border-color:#bfe0cb}
 .wide-modal{max-height:calc(100vh - 48px);overflow-y:auto}.velocity svg text{font-size:11px;fill:#6b7588}
 .impediment-note small{display:block;margin-top:4px;font-size:11px;opacity:.85}.task-card.blocked{cursor:not-allowed}
+.panel-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.panel-card{display:grid;gap:8px;text-align:left;background:#fff;border:1px solid #e3e7ed;border-radius:12px;padding:24px;color:#243247}.panel-card:hover{border-color:#8cadd4;background:#f8fafd}.panel-card span{font-size:24px;color:#254e80}.panel-card strong{font-size:17px}

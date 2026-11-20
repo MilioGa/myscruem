@@ -97,6 +97,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
+  if (!db.prepare('PRAGMA table_info(projects)').all().some(column => column.name === 'created_by')) {
+    db.exec('ALTER TABLE projects ADD COLUMN created_by INTEGER REFERENCES users(id)');
+    db.exec('UPDATE projects SET created_by=owner_id');
+  }
   const columns = ['Por hacer', 'En curso', 'En revisión', 'Terminado'];
   const taskTypes = ['Desarrollo', 'Pruebas', 'Diseño', 'Documentación'];
   const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map(column => column.name);
@@ -149,8 +153,9 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     next();
   };
   const admin = (req, res, next) => req.user.role === 'Administrador' ? next() : res.status(403).json({ error: 'Se requiere el rol Administrador.' });
+  const participates = "(?='Administrador' OR p.owner_id=? OR NOT EXISTS(SELECT 1 FROM teams WHERE teams.project_id=p.id) OR EXISTS(SELECT 1 FROM teams JOIN team_members ON team_members.team_id=teams.id WHERE teams.project_id=p.id AND team_members.user_id=?))";
   const projectFor = req => {
-    const p = get('SELECT * FROM projects WHERE id=? AND company_id=?', req.params.id, req.user.company_id);
+    const p = get(`SELECT p.* FROM projects p WHERE p.id=? AND p.company_id=? AND ${participates}`, req.params.id, req.user.company_id, req.user.role, req.user.id, req.user.id);
     if (!p) fail('Proyecto no encontrado.', 404);
     return p;
   };
@@ -236,7 +241,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (user.password && status === 'Pendiente') fail('La cuenta ya fue activada.');
     if (user.id === req.user.id && (role !== 'Administrador' || status !== 'Activo')) fail('No puedes desactivar tu cuenta ni quitarte el rol Administrador.');
     if (get('SELECT id FROM users WHERE company_id=? AND email=? AND id<>?', req.user.company_id, address, user.id)) fail('El correo ya está registrado.', 409);
-    if ((role !== 'Product Owner' || status !== 'Activo') && get('SELECT id FROM projects WHERE owner_id=? AND archived=0', user.id)) fail('Reasigna o archiva sus proyectos activos antes de cambiar el rol o desactivar al Product Owner.');
+    if (user.role === 'Product Owner' && (role !== 'Product Owner' || status !== 'Activo') && get('SELECT id FROM projects WHERE owner_id=? AND archived=0', user.id)) fail('Reasigna o archiva sus proyectos activos antes de cambiar el rol o desactivar al Product Owner.');
     transaction(() => {
       run('UPDATE users SET name=?,email=?,role=?,status=? WHERE id=?', name, address, role, status, user.id);
       if (status !== 'Activo' || role !== user.role) run('DELETE FROM sessions WHERE user_id=?', user.id);
@@ -245,13 +250,37 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     res.json({ ok: true });
   });
   app.get('/api/owners', auth, (req, res) => res.json(all("SELECT id,name FROM users WHERE company_id=? AND role='Product Owner' AND status='Activo'", req.user.company_id)));
-  app.get('/api/projects', auth, (req, res) => res.json(all('SELECT p.*,u.name AS owner FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.company_id=? ORDER BY p.id DESC', req.user.company_id)));
+  app.get('/api/projects', auth, (req, res) => res.json(all(`SELECT p.*,u.name AS owner FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.company_id=? AND ${participates} ORDER BY p.id DESC`, req.user.company_id, req.user.role, req.user.id, req.user.id)));
   app.post('/api/projects', auth, (req, res) => {
-    if (req.user.role !== 'Product Owner') fail('Solo un Product Owner puede crear proyectos.', 403);
     const name = text(req.body.name, 'Nombre');
     const description = text(req.body.description, 'Descripción', 2000);
-    const id = Number(run('INSERT INTO projects(company_id,name,description,owner_id) VALUES (?,?,?,?)', req.user.company_id, name, description, req.user.id).lastInsertRowid);
+    const id = Number(run('INSERT INTO projects(company_id,name,description,owner_id,created_by) VALUES (?,?,?,?,?)', req.user.company_id, name, description, req.user.id, req.user.id).lastInsertRowid);
     res.status(201).json({ id });
+  });
+  const projectTasks = 'SELECT tasks.id FROM tasks JOIN sprints ON sprints.id=tasks.sprint_id WHERE sprints.project_id=?';
+  const projectSprints = 'SELECT id FROM sprints WHERE project_id=?';
+  const projectCleanup = [
+    `DELETE FROM notifications WHERE project_id=? OR task_id IN (${projectTasks})`,
+    `DELETE FROM task_comments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM task_attachments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM impediments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM tasks WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM agreements WHERE meeting_id IN (SELECT meetings.id FROM meetings JOIN sprints ON sprints.id=meetings.sprint_id WHERE sprints.project_id=?)`,
+    `DELETE FROM meetings WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM burndown WHERE sprint_id IN (${projectSprints})`,
+    `DELETE FROM sprint_stories WHERE sprint_id IN (${projectSprints})`,
+    'DELETE FROM sprints WHERE project_id=?',
+    'DELETE FROM stories WHERE project_id=?',
+    'DELETE FROM epics WHERE project_id=?',
+    'DELETE FROM definition_of_done WHERE project_id=?',
+    'UPDATE teams SET project_id=NULL WHERE project_id=?',
+    'DELETE FROM projects WHERE id=?'
+  ];
+  app.delete('/api/projects/:id', auth, (req, res) => {
+    const p = projectFor(req);
+    if (p.created_by !== req.user.id && !(req.user.role === 'Product Owner' && p.owner_id === req.user.id)) fail('Solo quien creó el proyecto o su Product Owner pueden eliminarlo.', 403);
+    transaction(() => projectCleanup.forEach(sql => run(sql, ...Array(sql.split('?').length - 1).fill(p.id))));
+    res.json({ ok: true });
   });
   app.patch('/api/projects/:id', auth, (req, res) => {
     const p = projectFor(req);
