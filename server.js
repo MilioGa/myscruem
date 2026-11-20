@@ -85,6 +85,12 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
   `);
   db.exec('CREATE TABLE IF NOT EXISTS definition_of_done (project_id INTEGER PRIMARY KEY REFERENCES projects(id), criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+  if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'estimated_hours')) db.exec('ALTER TABLE stories ADD COLUMN estimated_hours REAL');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS poker_sessions (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), story_id INTEGER NOT NULL REFERENCES stories(id), status TEXT NOT NULL DEFAULT 'Votando' CHECK(status IN ('Votando','Revelada','Cerrada')), round INTEGER NOT NULL DEFAULT 1, points INTEGER, hours REAL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_open_poker ON poker_sessions(story_id) WHERE status<>'Cerrada';
+    CREATE TABLE IF NOT EXISTS poker_votes (session_id INTEGER NOT NULL REFERENCES poker_sessions(id), round INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), value TEXT NOT NULL, PRIMARY KEY(session_id,round,user_id));
+  `);
   db.exec("CREATE TABLE IF NOT EXISTS scoped_dod (scope TEXT NOT NULL CHECK(scope IN ('Historia','Sprint')), ref_id INTEGER NOT NULL, criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(scope,ref_id))");
   db.exec(`
     CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), actor_id INTEGER REFERENCES users(id), project_id INTEGER REFERENCES projects(id), task_id INTEGER REFERENCES tasks(id), kind TEXT NOT NULL, message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -275,6 +281,8 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     `DELETE FROM sprint_stories WHERE sprint_id IN (${projectSprints})`,
     `DELETE FROM scoped_dod WHERE scope='Sprint' AND ref_id IN (${projectSprints})`,
     "DELETE FROM scoped_dod WHERE scope='Historia' AND ref_id IN (SELECT id FROM stories WHERE project_id=?)",
+    'DELETE FROM poker_votes WHERE session_id IN (SELECT id FROM poker_sessions WHERE project_id=?)',
+    'DELETE FROM poker_sessions WHERE project_id=?',
     'DELETE FROM sprints WHERE project_id=?',
     'DELETE FROM stories WHERE project_id=?',
     'DELETE FROM epics WHERE project_id=?',
@@ -395,9 +403,86 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (get('SELECT story_id FROM sprint_stories WHERE story_id=?', story.id) || get('SELECT id FROM tasks WHERE story_id=?', story.id)) fail('La historia está en un sprint o tiene tareas; no se puede eliminar.', 409);
     transaction(() => {
       run("DELETE FROM scoped_dod WHERE scope='Historia' AND ref_id=?", story.id);
+      run('DELETE FROM poker_votes WHERE session_id IN (SELECT id FROM poker_sessions WHERE story_id=?)', story.id);
+      run('DELETE FROM poker_sessions WHERE story_id=?', story.id);
       run('DELETE FROM stories WHERE id=?', story.id);
     });
     res.json({ ok: true });
+  });
+  const notify = (userId, actor, projectId, taskId, kind, message) => {
+    if (!userId || userId === actor.id) return;
+    run('INSERT INTO notifications(user_id,actor_id,project_id,task_id,kind,message,created_at) VALUES (?,?,?,?,?,?,?)', userId, actor.id, projectId, taskId, kind, message, now().toISOString());
+  };
+  const pokerCards = ['1', '2', '3', '5', '8', '13', '21', '?'];
+  const pokerFor = (req, master = false) => {
+    const project = projectFor(req);
+    if (master && req.user.role !== 'Scrum Master') fail('Solo el Scrum Master dirige el Planning Poker.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const session = get('SELECT * FROM poker_sessions WHERE id=? AND project_id=?', Number(req.params.sessionId) || 0, project.id);
+    if (!session) fail('Sesión de Planning Poker no encontrada.', 404);
+    return { project, session };
+  };
+  app.get('/api/projects/:id/poker', auth, (req, res) => {
+    const project = projectFor(req);
+    res.json(all("SELECT poker_sessions.id,poker_sessions.story_id,poker_sessions.status,poker_sessions.round,stories.title,(SELECT COUNT(*) FROM poker_votes WHERE poker_votes.session_id=poker_sessions.id AND poker_votes.round=poker_sessions.round) AS votes FROM poker_sessions JOIN stories ON stories.id=poker_sessions.story_id WHERE poker_sessions.project_id=? AND poker_sessions.status<>'Cerrada' ORDER BY poker_sessions.id", project.id));
+  });
+  app.post('/api/projects/:id/poker', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo el Scrum Master dirige el Planning Poker.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const story = get('SELECT id,title FROM stories WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.storyId) ? req.body.storyId : 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    if (get("SELECT id FROM poker_sessions WHERE story_id=? AND status<>'Cerrada'", story.id)) fail('La historia ya tiene una sesión de Planning Poker abierta.', 409);
+    const id = transaction(() => {
+      const created = Number(run('INSERT INTO poker_sessions(project_id,story_id,created_by,created_at) VALUES (?,?,?,?)', project.id, story.id, req.user.id, now().toISOString()).lastInsertRowid);
+      const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
+      const people = team ? all("SELECT users.id FROM team_members JOIN users ON users.id=team_members.user_id WHERE team_id=? AND users.status='Activo'", team.id) : all("SELECT id FROM users WHERE company_id=? AND status='Activo' AND role IN ('Developer','Product Owner')", project.company_id);
+      for (const person of people) notify(person.id, req.user, project.id, null, 'Planning Poker', `${req.user.name} abrió el Planning Poker de "${story.title}" en ${project.name}.`);
+      return created;
+    });
+    res.status(201).json({ id });
+  });
+  app.get('/api/projects/:id/poker/:sessionId', auth, (req, res) => {
+    const project = projectFor(req);
+    const session = get('SELECT poker_sessions.*,stories.title,stories.actor,stories.goal,stories.benefit,stories.points AS story_points,stories.estimated_hours FROM poker_sessions JOIN stories ON stories.id=poker_sessions.story_id WHERE poker_sessions.id=? AND poker_sessions.project_id=?', Number(req.params.sessionId) || 0, project.id);
+    if (!session) fail('Sesión de Planning Poker no encontrada.', 404);
+    const votes = all('SELECT poker_votes.user_id,poker_votes.value,users.name FROM poker_votes JOIN users ON users.id=poker_votes.user_id WHERE session_id=? AND round=? ORDER BY users.name', session.id, session.round);
+    const hidden = session.status === 'Votando';
+    res.json({ ...session, cards: pokerCards, votes: votes.map(vote => ({ name: vote.name, value: hidden ? null : vote.value })), mine: votes.find(vote => vote.user_id === req.user.id)?.value ?? null });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/vote', auth, (req, res) => {
+    const { session } = pokerFor(req);
+    if (req.user.role === 'Administrador') fail('El Administrador no participa en el Planning Poker.', 403);
+    if (session.status !== 'Votando') fail('La votación de esta ronda ya se reveló.', 409);
+    if (!pokerCards.includes(req.body.value)) fail('Elige una carta: 1, 2, 3, 5, 8, 13, 21 o ?.');
+    run('INSERT INTO poker_votes(session_id,round,user_id,value) VALUES (?,?,?,?) ON CONFLICT(session_id,round,user_id) DO UPDATE SET value=excluded.value', session.id, session.round, req.user.id, req.body.value);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/reveal', auth, (req, res) => {
+    const { session } = pokerFor(req, true);
+    if (session.status !== 'Votando') fail('La ronda ya está revelada.', 409);
+    if (!get('SELECT user_id FROM poker_votes WHERE session_id=? AND round=?', session.id, session.round)) fail('Nadie ha votado en esta ronda.');
+    run("UPDATE poker_sessions SET status='Revelada' WHERE id=?", session.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/round', auth, (req, res) => {
+    const { session } = pokerFor(req, true);
+    if (session.status !== 'Revelada') fail('Revela los votos antes de iniciar otra ronda.', 409);
+    run("UPDATE poker_sessions SET status='Votando',round=round+1 WHERE id=?", session.id);
+    res.json({ round: session.round + 1 });
+  });
+  app.post('/api/projects/:id/poker/:sessionId/confirm', auth, (req, res) => {
+    const { session } = pokerFor(req, true);
+    if (session.status !== 'Revelada') fail('Revela los votos antes de confirmar la estimación.', 409);
+    if (![1, 2, 3, 5, 8, 13, 21].includes(req.body.points)) fail('Selecciona 1, 2, 3, 5, 8, 13 o 21 puntos.');
+    if (typeof req.body.hours !== 'number' || !Number.isFinite(req.body.hours) || req.body.hours <= 0 || req.body.hours > 999) fail('Indica las horas estimadas (mayor que 0 y hasta 999).');
+    if (req.body.points > 13 && get('SELECT story_id FROM sprint_stories WHERE story_id=?', session.story_id)) fail('Una historia comprometida no puede superar 13 puntos.');
+    const hours = Math.round(req.body.hours * 10) / 10;
+    transaction(() => {
+      run('UPDATE stories SET points=?,estimated_hours=? WHERE id=?', req.body.points, hours, session.story_id);
+      run("UPDATE poker_sessions SET status='Cerrada',points=?,hours=? WHERE id=?", req.body.points, hours, session.id);
+    });
+    res.json({ points: req.body.points, hours });
   });
   app.get('/api/projects/:id/sprints', auth, (req, res) => {
     const project = projectFor(req);
@@ -542,10 +627,6 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const sprint = get("SELECT id,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     res.json({ sprintId: sprint?.id ?? null, version: sprint?.board_version ?? 0 });
   });
-  const notify = (userId, actor, projectId, taskId, kind, message) => {
-    if (!userId || userId === actor.id) return;
-    run('INSERT INTO notifications(user_id,actor_id,project_id,task_id,kind,message,created_at) VALUES (?,?,?,?,?,?,?)', userId, actor.id, projectId, taskId, kind, message, now().toISOString());
-  };
   const activeTaskFor = req => {
     const project = projectFor(req);
     if (req.user.role !== 'Developer') fail('Solo un Developer puede modificar tareas del tablero.', 403);
