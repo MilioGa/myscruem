@@ -153,6 +153,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     next();
   };
   const admin = (req, res, next) => req.user.role === 'Administrador' ? next() : res.status(403).json({ error: 'Se requiere el rol Administrador.' });
+  const teamManager = (req, res, next) => ['Administrador', 'Scrum Master'].includes(req.user.role) ? next() : res.status(403).json({ error: 'Se requiere el rol Administrador o Scrum Master.' });
   const participates = "(?='Administrador' OR p.owner_id=? OR NOT EXISTS(SELECT 1 FROM teams WHERE teams.project_id=p.id) OR EXISTS(SELECT 1 FROM teams JOIN team_members ON team_members.team_id=teams.id WHERE teams.project_id=p.id AND team_members.user_id=?))";
   const projectFor = req => {
     const p = get(`SELECT p.* FROM projects p WHERE p.id=? AND p.company_id=? AND ${participates}`, req.params.id, req.user.company_id, req.user.role, req.user.id, req.user.id);
@@ -203,7 +204,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('DELETE FROM sessions WHERE id=?', req.user.sid);
     res.clearCookie('sid', cookieOptions).json({ ok: true });
   });
-  app.get('/api/users', auth, admin, (req, res) => res.json(all('SELECT id,name,email,role,status FROM users WHERE company_id=? ORDER BY name', req.user.company_id)));
+  app.get('/api/users', auth, teamManager, (req, res) => res.json(all('SELECT id,name,email,role,status FROM users WHERE company_id=? ORDER BY name', req.user.company_id)));
   app.post('/api/users', auth, admin, (req, res) => {
     const name = text(req.body.name, 'Nombre');
     const address = email(req.body.email);
@@ -560,18 +561,20 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     for (const id of memberIds) {
       if (!Number.isSafeInteger(id) || !get("SELECT id FROM users WHERE id=? AND company_id=? AND role<>'Administrador' AND status<>'Inactivo'", id, req.user.company_id)) fail('Los integrantes deben ser usuarios activos o pendientes de la empresa.');
     }
+    const memberRoles = new Set(memberIds.map(id => get('SELECT role FROM users WHERE id=?', id).role));
+    if (!['Scrum Master', 'Product Owner', 'Developer'].every(role => memberRoles.has(role))) fail('El equipo debe tener al menos un Scrum Master, un Product Owner y un Developer.');
     return { name, projectId, memberIds };
   };
   const saveMembers = (teamId, memberIds) => {
     run('DELETE FROM team_members WHERE team_id=?', teamId);
     for (const id of memberIds) run('INSERT INTO team_members(team_id,user_id) VALUES (?,?)', teamId, id);
   };
-  app.get('/api/teams', auth, admin, (req, res) => {
+  app.get('/api/teams', auth, teamManager, (req, res) => {
     const teams = all('SELECT teams.id,teams.name,teams.project_id,projects.name AS project FROM teams LEFT JOIN projects ON projects.id=teams.project_id WHERE teams.company_id=? ORDER BY teams.name', req.user.company_id);
     const members = all('SELECT team_members.team_id,users.id,users.name,users.role FROM team_members JOIN users ON users.id=team_members.user_id JOIN teams ON teams.id=team_members.team_id WHERE teams.company_id=? ORDER BY users.name', req.user.company_id);
     res.json(teams.map(team => ({ ...team, members: members.filter(member => member.team_id === team.id).map(({ team_id, ...member }) => member) })));
   });
-  app.post('/api/teams', auth, admin, (req, res) => {
+  app.post('/api/teams', auth, teamManager, (req, res) => {
     const data = teamData(req);
     const id = transaction(() => {
       const created = Number(run('INSERT INTO teams(company_id,name,project_id) VALUES (?,?,?)', req.user.company_id, data.name, data.projectId).lastInsertRowid);
@@ -580,7 +583,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.status(201).json({ id });
   });
-  app.patch('/api/teams/:id', auth, admin, (req, res) => {
+  app.patch('/api/teams/:id', auth, teamManager, (req, res) => {
     const team = get('SELECT * FROM teams WHERE id=? AND company_id=?', Number(req.params.id) || 0, req.user.company_id);
     if (!team) fail('Equipo no encontrado.', 404);
     const data = teamData(req, team);
