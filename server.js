@@ -78,6 +78,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS epics (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), name TEXT NOT NULL, description TEXT NOT NULL DEFAULT \'\', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id,name))');
   if (!db.prepare('PRAGMA table_info(stories)').all().some(column => column.name === 'epic_id')) db.exec('ALTER TABLE stories ADD COLUMN epic_id INTEGER REFERENCES epics(id)');
+  if (!db.prepare('PRAGMA table_info(epics)').all().some(column => column.name === 'color')) db.exec("ALTER TABLE epics ADD COLUMN color TEXT NOT NULL DEFAULT '#254e80'");
   db.exec(`
     CREATE TABLE IF NOT EXISTS impediments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Abierto' CHECK(status IN ('Abierto','Cerrado')), reported_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, solution TEXT, closed_by INTEGER REFERENCES users(id), closed_at TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_impediment ON impediments(task_id) WHERE status='Abierto';
@@ -304,18 +305,28 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const stories = all('SELECT stories.*,sprint_stories.sprint_id FROM stories LEFT JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE stories.project_id=? ORDER BY position,id', project.id);
     res.json(stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })));
   });
-  app.post('/api/projects/:id/stories', auth, (req, res) => {
-    const project = projectFor(req);
-    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner de este proyecto puede crear historias.', 403);
-    if (project.archived) fail('No se pueden agregar historias a un proyecto archivado.');
+  const storyData = (req, project) => {
     const title = text(req.body.title, 'Título');
     const actor = text(req.body.actor, 'Como', 300);
     const goal = text(req.body.goal, 'Quiero', 1000);
     const benefit = text(req.body.benefit, 'Para', 1000);
     if (!Array.isArray(req.body.criteria) || !req.body.criteria.length || req.body.criteria.length > 20) fail('Agrega entre 1 y 20 criterios de aceptación.');
     const criteria = req.body.criteria.map(value => text(value, 'Criterio de aceptación', 1000));
+    const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
+    if (!epic) fail('Selecciona la épica de la historia; es obligatoria.');
+    return { title, actor, goal, benefit, criteria, epicId: epic.id };
+  };
+  const storyOwner = req => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner de este proyecto puede gestionar historias.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    return project;
+  };
+  app.post('/api/projects/:id/stories', auth, (req, res) => {
+    const project = storyOwner(req);
+    const data = storyData(req, project);
     const position = get('SELECT COALESCE(MAX(position),0)+1 AS next FROM stories WHERE project_id=?', project.id).next;
-    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria,position) VALUES (?,?,?,?,?,?,?)', project.id, title, actor, goal, benefit, JSON.stringify(criteria), position).lastInsertRowid);
+    const id = Number(run('INSERT INTO stories(project_id,title,actor,goal,benefit,criteria,position,epic_id) VALUES (?,?,?,?,?,?,?,?)', project.id, data.title, data.actor, data.goal, data.benefit, JSON.stringify(data.criteria), position, data.epicId).lastInsertRowid);
     res.status(201).json({ id });
   });
   app.patch('/api/projects/:id/stories/:storyId/estimate', auth, (req, res) => {
@@ -345,6 +356,22 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!get('SELECT id FROM stories WHERE id=? AND project_id=?', req.params.storyId, project.id)) fail('Historia no encontrada.', 404);
     if (!['Must have', 'Should have', 'Could have', 'Won’t have'].includes(req.body.priority)) fail('Selecciona una prioridad MoSCoW válida.');
     run('UPDATE stories SET priority=? WHERE id=?', req.body.priority, req.params.storyId);
+    res.json({ ok: true });
+  });
+  app.patch('/api/projects/:id/stories/:storyId', auth, (req, res) => {
+    const project = storyOwner(req);
+    const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    const data = storyData(req, project);
+    run('UPDATE stories SET title=?,actor=?,goal=?,benefit=?,criteria=?,epic_id=? WHERE id=?', data.title, data.actor, data.goal, data.benefit, JSON.stringify(data.criteria), data.epicId, story.id);
+    res.json({ ok: true });
+  });
+  app.delete('/api/projects/:id/stories/:storyId', auth, (req, res) => {
+    const project = storyOwner(req);
+    const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    if (!story) fail('Historia no encontrada.', 404);
+    if (get('SELECT story_id FROM sprint_stories WHERE story_id=?', story.id) || get('SELECT id FROM tasks WHERE story_id=?', story.id)) fail('La historia está en un sprint o tiene tareas; no se puede eliminar.', 409);
+    run('DELETE FROM stories WHERE id=?', story.id);
     res.json({ ok: true });
   });
   app.get('/api/projects/:id/sprints', auth, (req, res) => {
@@ -593,46 +620,43 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.json({ ok: true });
   });
-  const epicOwner = req => {
+  const epicMaster = req => {
     const project = projectFor(req);
-    if (req.user.role !== 'Product Owner' || project.owner_id !== req.user.id) fail('Solo el Product Owner del proyecto puede gestionar épicas.', 403);
+    if (req.user.role !== 'Scrum Master') fail('Solo el Scrum Master puede crear y editar épicas.', 403);
     if (project.archived) fail('El proyecto está archivado.');
     return project;
   };
   const epicData = (req, project, existing) => {
     const name = text(req.body.name, 'Nombre de la épica');
-    const description = req.body.description === undefined || req.body.description === '' ? '' : text(req.body.description, 'Descripción', 1000);
+    const description = text(req.body.description, 'Descripción de la épica', 1000);
+    if (typeof req.body.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(req.body.color)) fail('Selecciona el color de la épica.');
     if (get('SELECT id FROM epics WHERE project_id=? AND name=? AND id<>?', project.id, name, existing?.id ?? 0)) fail('Ya existe una épica con ese nombre.', 409);
-    return { name, description };
+    return { name, description, color: req.body.color.toLowerCase() };
   };
   app.get('/api/projects/:id/epics', auth, (req, res) => {
     const project = projectFor(req);
-    res.json(all('SELECT epics.id,epics.name,epics.description,COUNT(stories.id) AS stories,COALESCE(SUM(stories.points),0) AS points FROM epics LEFT JOIN stories ON stories.epic_id=epics.id WHERE epics.project_id=? GROUP BY epics.id ORDER BY epics.id', project.id));
+    res.json(all('SELECT epics.id,epics.name,epics.description,epics.color,COUNT(stories.id) AS stories,COALESCE(SUM(stories.points),0) AS points FROM epics LEFT JOIN stories ON stories.epic_id=epics.id WHERE epics.project_id=? GROUP BY epics.id ORDER BY epics.id', project.id));
   });
   app.post('/api/projects/:id/epics', auth, (req, res) => {
-    const project = epicOwner(req);
+    const project = epicMaster(req);
     const data = epicData(req, project);
-    res.status(201).json({ id: Number(run('INSERT INTO epics(project_id,name,description) VALUES (?,?,?)', project.id, data.name, data.description).lastInsertRowid) });
+    res.status(201).json({ id: Number(run('INSERT INTO epics(project_id,name,description,color) VALUES (?,?,?,?)', project.id, data.name, data.description, data.color).lastInsertRowid) });
   });
   app.patch('/api/projects/:id/epics/:epicId', auth, (req, res) => {
-    const project = epicOwner(req);
+    const project = epicMaster(req);
     const epic = get('SELECT * FROM epics WHERE id=? AND project_id=?', Number(req.params.epicId) || 0, project.id);
     if (!epic) fail('Épica no encontrada.', 404);
     const data = epicData(req, project, epic);
-    run('UPDATE epics SET name=?,description=? WHERE id=?', data.name, data.description, epic.id);
+    run('UPDATE epics SET name=?,description=?,color=? WHERE id=?', data.name, data.description, data.color, epic.id);
     res.json({ ok: true });
   });
   app.patch('/api/projects/:id/stories/:storyId/epic', auth, (req, res) => {
-    const project = epicOwner(req);
+    const project = storyOwner(req);
     const story = get('SELECT id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
     if (!story) fail('Historia no encontrada.', 404);
-    let epicId = null;
-    if (req.body.epicId !== null) {
-      const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
-      if (!epic) fail('Selecciona una épica del proyecto.');
-      epicId = epic.id;
-    }
-    run('UPDATE stories SET epic_id=? WHERE id=?', epicId, story.id);
+    const epic = get('SELECT id FROM epics WHERE id=? AND project_id=?', Number.isSafeInteger(req.body.epicId) ? req.body.epicId : 0, project.id);
+    if (!epic) fail('Selecciona una épica del proyecto.');
+    run('UPDATE stories SET epic_id=? WHERE id=?', epic.id, story.id);
     res.json({ ok: true });
   });
   app.get('/api/projects/:id/stories/:storyId/tasks', auth, (req, res) => {

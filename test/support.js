@@ -43,7 +43,9 @@ export async function setup(options = {}) {
   const master = await member('master', 'Scrum Master');
   const project = await owner.request('/projects', 'POST', { name: 'Portal', description: 'Portal de clientes' }, 201);
   const secondProject = await owner.request('/projects', 'POST', { name: 'Otro portal', description: 'Otro producto' }, 201);
-  const story = { title: 'Registro de clientes', actor: 'vendedor', goal: 'registrar clientes', benefit: 'atender sus solicitudes', criteria: ['El nombre es obligatorio.', 'Los datos se guardan.'] };
+  const epic = await master.request(`/projects/${project.id}/epics`, 'POST', { name: 'Clientes', description: 'Gestión de clientes', color: '#254e80' }, 201);
+  const secondEpic = await master.request(`/projects/${secondProject.id}/epics`, 'POST', { name: 'General', description: 'Funciones generales', color: '#2f8f6b' }, 201);
+  const story = { title: 'Registro de clientes', actor: 'vendedor', goal: 'registrar clientes', benefit: 'atender sus solicitudes', criteria: ['El nombre es obligatorio.', 'Los datos se guardan.'], epicId: epic.id };
   const stories = `/projects/${project.id}/stories`;
-  return { db, admin, outside, owner: owner.request, otherOwner: otherOwner.request, developer: developer.request, master: master.request, project, secondProject, story, stories, close: async () => { await new Promise(resolve => server.close(resolve)); db.close(); } };
+  return { db, admin, outside, owner: owner.request, otherOwner: otherOwner.request, developer: developer.request, master: master.request, project, secondProject, epic, secondEpic, story, stories, close: async () => { await new Promise(resolve => server.close(resolve)); db.close(); } };
 }
