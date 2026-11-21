@@ -94,6 +94,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_poker ON poker_sessions(story_id) WHERE status<>'Cerrada';
     CREATE TABLE IF NOT EXISTS poker_votes (session_id INTEGER NOT NULL REFERENCES poker_sessions(id), round INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), value TEXT NOT NULL, PRIMARY KEY(session_id,round,user_id));
   `);
+  db.exec('CREATE TABLE IF NOT EXISTS tutorial_progress (user_id INTEGER NOT NULL REFERENCES users(id), module_id TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(user_id,module_id))');
   db.exec('CREATE TABLE IF NOT EXISTS work_logs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), hours REAL NOT NULL, day TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
   db.exec("CREATE TABLE IF NOT EXISTS scoped_dod (scope TEXT NOT NULL CHECK(scope IN ('Historia','Sprint')), ref_id INTEGER NOT NULL, criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(scope,ref_id))");
   db.exec(`
@@ -850,7 +851,16 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     ]
   };
   const plainText = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  app.get('/api/training', auth, (req, res) => res.json({ ...training.guide, infographics: training.infographics, terms: training.glossary.length }));
+  const tutorialStatus = userId => {
+    const completed = all('SELECT module_id FROM tutorial_progress WHERE user_id=? ORDER BY completed_at,module_id', userId).map(row => row.module_id).filter(id => training.guide.modules.some(module => module.id === id));
+    return { completed, finished: completed.length === training.guide.modules.length };
+  };
+  app.get('/api/training', auth, (req, res) => res.json({ ...training.guide, infographics: training.infographics, terms: training.glossary.length, progress: tutorialStatus(req.user.id) }));
+  app.post('/api/training/progress', auth, (req, res) => {
+    if (!training.guide.modules.some(module => module.id === req.body.moduleId)) fail('Sección del tutorial no encontrada.', 404);
+    run('INSERT OR IGNORE INTO tutorial_progress(user_id,module_id,completed_at) VALUES (?,?,?)', req.user.id, req.body.moduleId, now().toISOString());
+    res.json(tutorialStatus(req.user.id));
+  });
   app.get('/api/training/glossary', auth, (req, res) => {
     const query = plainText(typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '').trim();
     res.json(query ? training.glossary.filter(item => plainText(`${item.term} ${item.definition}`).includes(query)) : training.glossary);

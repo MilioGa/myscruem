@@ -112,7 +112,9 @@ async function renderTraining() {
     state.training ||= await api('/training');
     const guide = state.training;
     const module = guide.modules.find(item => item.id === state.trainingModule) || guide.modules[0];
-    target.innerHTML = `<p class="training-intro">${escape(guide.intro)}</p><div class="training"><nav class="training-modules" aria-label="Módulos de la guía">${guide.modules.map(item => `<button data-module="${item.id}" class="${item.id === module.id && !['infografias', 'glosario'].includes(state.trainingModule) ? 'selected' : ''}">${escape(item.title)}</button>`).join('')}<button data-module="infografias" class="${state.trainingModule === 'infografias' ? 'selected' : ''}">Infografías</button><button data-module="glosario" class="${state.trainingModule === 'glosario' ? 'selected' : ''}">Glosario (${guide.terms} términos)</button></nav><section class="training-body" id="training-body"></section></div>`;
+    const progress = guide.progress;
+    const percent = Math.round(progress.completed.length * 100 / guide.modules.length);
+    target.innerHTML = `<p class="training-intro">${escape(guide.intro)}</p><div class="progress tutorial-progress"><div class="progress-bar"><span style="width:${percent}%"></span></div><strong>${percent} %</strong><small>${progress.finished ? '¡Completaste el tutorial teórico de Scrum!' : `${progress.completed.length} de ${guide.modules.length} secciones del tutorial completadas`}</small></div><div class="training"><nav class="training-modules" aria-label="Módulos de la guía">${guide.modules.map(item => `<button data-module="${item.id}" class="${item.id === module.id && !['infografias', 'glosario'].includes(state.trainingModule) ? 'selected' : ''}">${progress.completed.includes(item.id) ? '✓ ' : ''}${escape(item.title)}</button>`).join('')}<button data-module="infografias" class="${state.trainingModule === 'infografias' ? 'selected' : ''}">Infografías</button><button data-module="glosario" class="${state.trainingModule === 'glosario' ? 'selected' : ''}">Glosario (${guide.terms} términos)</button></nav><section class="training-body" id="training-body"></section></div>`;
     const body = document.querySelector('#training-body');
     if (state.trainingModule === 'infografias') {
       body.innerHTML = `<h2>Infografías</h2><div class="infographics">${guide.infographics.map(item => `<figure><img src="${escape(item.src)}" alt="${escape(item.alt)}"><figcaption>${escape(item.title)}</figcaption></figure>`).join('')}</div>`;
@@ -125,7 +127,21 @@ async function renderTraining() {
       document.querySelector('#glossary-search').oninput = event => { state.glossaryQuery = event.target.value; clearTimeout(timer); timer = setTimeout(() => search().catch(error => flash(error.message)), 200); };
       await search();
     } else {
-      body.innerHTML = `<h2>${escape(module.title)}</h2><p class="muted">${escape(module.summary)}</p>${module.sections.map(section => `<article class="training-section"><h3>${escape(section.title)}</h3><p>${escape(section.body)}</p></article>`).join('')}`;
+      const index = guide.modules.indexOf(module);
+      const next = guide.modules[index + 1];
+      const done = progress.completed.includes(module.id);
+      body.innerHTML = `<h2>${escape(module.title)}</h2><p class="muted">${escape(module.summary)}</p>${module.sections.map(section => `<article class="training-section"><h3>${escape(section.title)}</h3><p>${escape(section.body)}</p></article>`).join('')}<div class="story-actions"><span class="muted">${done ? '✓ Sección completada' : `Sección ${index + 1} de ${guide.modules.length}`}</span><button id="complete-module" class="primary">${done ? (next ? 'Ir a la siguiente sección' : 'Volver al inicio') : next ? 'Marcar como leída y continuar' : 'Terminar el tutorial'}</button></div>`;
+      document.querySelector('#complete-module').onclick = async event => {
+        event.target.disabled = true;
+        try {
+          if (!done) {
+            state.training.progress = await api('/training/progress', 'POST', { moduleId: module.id });
+            if (state.training.progress.finished) flash('¡Completaste el tutorial teórico de Scrum!');
+          }
+          state.trainingModule = next ? next.id : guide.modules[0].id;
+          await renderTraining();
+        } catch (error) { event.target.disabled = false; flash(error.message); }
+      };
     }
     document.querySelectorAll('[data-module]').forEach(button => button.onclick = () => { state.trainingModule = button.dataset.module; renderTraining(); });
   } catch (error) { target.innerHTML = ''; flash(error.message); }
