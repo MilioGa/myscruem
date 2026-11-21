@@ -37,6 +37,9 @@ const password = value => {
 export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', 'myscruem.sqlite'), sessionMs = 30 * 60 * 1000, now = () => new Date() } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  const get = (sql, ...params) => db.prepare(sql).get(...params);
+  const all = (sql, ...params) => db.prepare(sql).all(...params);
+  const run = (sql, ...params) => db.prepare(sql).run(...params);
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
@@ -102,9 +105,19 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS task_attachments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
   db.exec(`
-    CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), type TEXT NOT NULL CHECK(type IN ('Daily','Revisión','Retrospectiva')), date TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), type TEXT NOT NULL CHECK(type IN ('Planning','Daily','Revisión','Retrospectiva')), date TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS agreements (id INTEGER PRIMARY KEY, meeting_id INTEGER NOT NULL REFERENCES meetings(id), text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, done_by INTEGER REFERENCES users(id), done_at TEXT);
   `);
+  if (!get("SELECT sql FROM sqlite_master WHERE name='meetings'").sql.includes("'Planning'")) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec(`BEGIN;
+      CREATE TABLE meetings_planning (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), type TEXT NOT NULL CHECK(type IN ('Planning','Daily','Revisión','Retrospectiva')), date TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+      INSERT INTO meetings_planning SELECT id,sprint_id,type,date,attendees,notes,created_by,created_at FROM meetings;
+      DROP TABLE meetings;
+      ALTER TABLE meetings_planning RENAME TO meetings;
+      COMMIT;`);
+    db.exec('PRAGMA foreign_keys = ON');
+  }
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   if (!db.prepare('PRAGMA table_info(projects)').all().some(column => column.name === 'created_by')) {
@@ -122,9 +135,6 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   const smallJson = express.json({ limit: '20kb' });
   const uploadJson = express.json({ limit: '8mb' });
   app.use((req, res, next) => (req.method === 'POST' && /^\/api\/projects\/\d+\/tasks\/\d+\/attachments$/.test(req.path) ? uploadJson : smallJson)(req, res, next));
-  const get = (sql, ...params) => db.prepare(sql).get(...params);
-  const all = (sql, ...params) => db.prepare(sql).all(...params);
-  const run = (sql, ...params) => db.prepare(sql).run(...params);
   const transaction = fn => {
     db.exec('BEGIN');
     try { const result = fn(); db.exec('COMMIT'); return result; }
@@ -958,22 +968,36 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('DELETE FROM task_attachments WHERE id=?', file.id);
     res.json({ ok: true });
   });
-  const meetingTypes = ['Daily', 'Revisión', 'Retrospectiva'];
+  const meetingTypes = ['Planning', 'Daily', 'Revisión', 'Retrospectiva'];
   app.get('/api/projects/:id/sprints/:sprintId/meetings', auth, (req, res) => {
     const { sprint } = sprintFor(req);
     const meetings = all('SELECT meetings.id,meetings.type,meetings.date,meetings.attendees,meetings.notes,meetings.created_at,users.name AS author FROM meetings JOIN users ON users.id=meetings.created_by WHERE sprint_id=? ORDER BY meetings.date DESC,meetings.id DESC', sprint.id);
     const agreements = all('SELECT agreements.id,agreements.meeting_id,agreements.text,agreements.done,agreements.done_at,users.name AS done_by FROM agreements JOIN meetings ON meetings.id=agreements.meeting_id LEFT JOIN users ON users.id=agreements.done_by WHERE meetings.sprint_id=? ORDER BY agreements.id', sprint.id);
     res.json(meetings.map(meeting => ({ ...meeting, agreements: agreements.filter(item => item.meeting_id === meeting.id).map(({ meeting_id, ...item }) => item) })));
   });
-  app.post('/api/projects/:id/sprints/:sprintId/meetings', auth, (req, res) => {
-    const { project, sprint } = sprintFor(req);
-    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede registrar actas.', 403);
-    if (project.archived) fail('El proyecto está archivado.');
-    if (!meetingTypes.includes(req.body.type)) fail('Selecciona Daily, Revisión o Retrospectiva.');
+  const meetingData = req => {
+    if (!meetingTypes.includes(req.body.type)) fail('Selecciona Planning, Daily, Revisión o Retrospectiva.');
     const date = typeof req.body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date) ? new Date(req.body.date + 'T00:00:00Z') : null;
     if (!date || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== req.body.date) fail('Indica una fecha válida.');
     const attendees = req.body.attendees === undefined || req.body.attendees === '' ? '' : text(req.body.attendees, 'Asistentes', 500);
     const notes = text(req.body.notes, 'Notas', 3000);
+    return { attendees, notes };
+  };
+  app.patch('/api/projects/:id/meetings/:meetingId', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede editar las reuniones.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const meeting = get('SELECT meetings.id FROM meetings JOIN sprints ON sprints.id=meetings.sprint_id WHERE meetings.id=? AND sprints.project_id=?', Number(req.params.meetingId) || 0, project.id);
+    if (!meeting) fail('Reunión no encontrada.', 404);
+    const { attendees, notes } = meetingData(req);
+    run('UPDATE meetings SET type=?,date=?,attendees=?,notes=? WHERE id=?', req.body.type, req.body.date, attendees, notes, meeting.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/sprints/:sprintId/meetings', auth, (req, res) => {
+    const { project, sprint } = sprintFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede registrar actas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const { attendees, notes } = meetingData(req);
     const agreements = req.body.agreements === undefined ? [] : req.body.agreements;
     if (!Array.isArray(agreements) || agreements.length > 20) fail('Registra hasta 20 acuerdos.');
     const texts = agreements.map(item => text(item, 'Acuerdo', 300));
