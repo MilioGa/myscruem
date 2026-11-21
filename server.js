@@ -615,7 +615,16 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       const recorded = records.filter(record => record.day <= date || date === dates.at(-1)).at(-1);
       return { date, ideal, remaining: recorded ? recorded.remaining : committed };
     });
-    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days });
+    const plannedHours = Math.round(get('SELECT COALESCE(SUM(stories.estimated_hours),0) AS total FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprint.id).total * 10) / 10;
+    const logs = all('SELECT work_logs.day,SUM(work_logs.hours) AS hours FROM work_logs JOIN tasks ON tasks.id=work_logs.task_id WHERE tasks.sprint_id=? GROUP BY work_logs.day ORDER BY work_logs.day', sprint.id);
+    const logged = Math.round(logs.reduce((sum, log) => sum + log.hours, 0) * 100) / 100;
+    const hourDays = dates.map((date, index) => {
+      const ideal = Math.round(plannedHours * (1 - index / Math.max(dates.length - 1, 1)) * 10) / 10;
+      if (!last || date > last) return { date, ideal, remaining: null };
+      const spent = logs.filter(log => log.day <= date || date === dates.at(-1)).reduce((sum, log) => sum + log.hours, 0);
+      return { date, ideal, remaining: Math.max(Math.round((plannedHours - spent) * 100) / 100, 0) };
+    });
+    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days, hours: { committed: plannedHours, logged, remaining: Math.max(Math.round((plannedHours - logged) * 100) / 100, 0), days: hourDays } });
   });
   const assignable = project => {
     const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
