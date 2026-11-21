@@ -41,3 +41,4 @@
 .criteria-list{display:grid;gap:4px;margin-top:8px}.criteria-list .check{margin:0;font-weight:500}.criteria-list .done{color:#2f7a5b}
 .story-links{display:flex;gap:6px;flex-wrap:wrap}
 .capacity{display:flex;gap:22px;align-items:center;flex-wrap:wrap;background:#f5f7fa;border:1px solid #e5eaf0;border-radius:9px;padding:14px 18px;margin-bottom:14px}.capacity div{display:grid;gap:4px}.capacity.over{border-color:#e3a59d;background:#fdf3f1}.capacity form{display:flex;gap:8px;margin-left:auto}.capacity input{width:110px}.panel-sprint{margin-top:32px}.panel-stories{display:grid;gap:10px}
+.task-story{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}.task-card.foreign{opacity:.82}
