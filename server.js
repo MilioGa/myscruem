@@ -62,7 +62,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
-  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0']]) {
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0'], ['capacity_hours', 'REAL']]) {
     if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
   }
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
@@ -514,7 +514,16 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.get('/api/projects/:id/sprints/:sprintId/stories', auth, (req, res) => {
     const { project, sprint } = sprintFor(req);
     const stories = all('SELECT stories.*,sprint_stories.completed FROM stories JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE sprint_stories.sprint_id=? AND stories.project_id=? ORDER BY position,id', sprint.id, project.id);
-    res.json({ stories: stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })), points: stories.reduce((sum, story) => sum + (story.points || 0), 0) });
+    res.json({ stories: stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria), criteria_done: JSON.parse(story.criteria_done) })), points: stories.reduce((sum, story) => sum + (story.points || 0), 0), hours: Math.round(stories.reduce((sum, story) => sum + (story.estimated_hours || 0), 0) * 10) / 10, capacity: sprint.capacity_hours });
+  });
+  app.patch('/api/projects/:id/sprints/:sprintId/capacity', auth, (req, res) => {
+    const { project, sprint } = sprintFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede definir la capacidad del sprint.', 403);
+    if (project.archived || sprint.status === 'Cerrado') fail('No se puede cambiar la capacidad de un sprint cerrado.');
+    if (typeof req.body.hours !== 'number' || !Number.isFinite(req.body.hours) || req.body.hours <= 0 || req.body.hours > 9999) fail('Indica la capacidad en horas (mayor que 0 y hasta 9999).');
+    const hours = Math.round(req.body.hours * 10) / 10;
+    run('UPDATE sprints SET capacity_hours=? WHERE id=?', hours, sprint.id);
+    res.json({ capacity: hours });
   });
   const planningFor = req => {
     const current = sprintFor(req);

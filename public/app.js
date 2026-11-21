@@ -173,7 +173,15 @@ function renderPanel() {
   const panel = panels[state.user.role];
   const project = currentProject();
   const target = document.querySelector('#page-content');
-  target.innerHTML = `<p class="muted">${project ? `Proyecto actual: <strong>${escape(project.name)}</strong>` : 'Todavía no hay proyectos activos.'}</p><div class="panel-grid">${panel.actions.map(([action, icon, label, text]) => `<button class="panel-card" data-panel="${action}"><span>${icon}</span><strong>${escape(label)}</strong><small>${escape(text)}</small></button>`).join('')}</div>`;
+  target.innerHTML = `<p class="muted">${project ? `Proyecto actual: <strong>${escape(project.name)}</strong>` : 'Todavía no hay proyectos activos.'}</p><div class="panel-grid">${panel.actions.map(([action, icon, label, text]) => `<button class="panel-card" data-panel="${action}"><span>${icon}</span><strong>${escape(label)}</strong><small>${escape(text)}</small></button>`).join('')}</div><div id="panel-sprint"></div>`;
+  if (state.user.role === 'Developer' && project) {
+    api(`/projects/${project.id}/board`).then(board => {
+      const box = document.querySelector('#panel-sprint');
+      if (!box) return;
+      const mine = board.tasks.filter(task => task.assignee_id === state.user.id);
+      box.innerHTML = `<section class="panel-sprint"><h2>${board.sprint ? `Historias de ${escape(board.sprint.name)}` : 'Sin sprint activo'}</h2>${board.sprint ? `<p class="muted">${escape(board.sprint.goal)} · ${mine.length} ${mine.length === 1 ? 'tarea asignada' : 'tareas asignadas'} a ti</p><div class="panel-stories">${board.stories.map(story => `<article class="planning-story"><div><strong>HU-${story.id} · ${escape(story.title)}</strong><small>${story.points ?? 0} puntos · ${board.tasks.filter(task => task.story_id === story.id).length} tareas · tuyas: ${mine.filter(task => task.story_id === story.id).length}</small></div>${badge(story.completed ? 'Terminada' : 'En curso', story.completed ? 'green' : '')}</article>`).join('') || '<p class="muted">El sprint no tiene historias.</p>'}</div>` : '<p class="muted">Cuando el Scrum Master inicie un sprint verás aquí sus historias.</p>'}</section>`;
+    }).catch(() => {});
+  }
   document.querySelectorAll('[data-panel]').forEach(button => button.onclick = () => {
     const [kind, key] = button.dataset.panel.split(':');
     if (kind === 'page') { state.page = key; state.query = ''; render(); }
@@ -494,10 +502,20 @@ async function planningDialog(project, sprint) {
     const allStories = await api(`/projects/${project.id}/stories`);
     const available = allStories.filter(story => !story.sprint_id);
     const editable = state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación';
-    const row = (story, included) => `<article class="planning-story"><div><strong>${escape(story.title)}</strong><small>${escape(story.priority)} · ${story.points ?? 'Sin estimar'} puntos</small></div>${editable ? `<button class="quiet" data-selection="${story.id}" data-included="${included}" ${!included && (!story.points || story.points > 13) ? 'disabled' : ''} aria-label="${included ? 'Retirar' : 'Agregar'} ${escape(story.title)}">${included ? '−' : '+'}</button>` : ''}</article>`;
-    dialog('Sprint Backlog', `<p class="muted">${escape(project.name)} · ${escape(sprint.name)}</p><p class="project-description">${escape(sprint.goal)}</p><div class="planning-columns"><section><h3>Product Backlog</h3>${available.length ? available.map(story => row(story, false)).join('') : '<p class="muted">No hay historias disponibles.</p>'}</section><section><h3>Historias seleccionadas</h3>${selected.stories.length ? selected.stories.map(story => row(story, true)).join('') : '<p class="muted">Aún no se han seleccionado historias.</p>'}</section></div><div class="planning-total"><strong>${selected.points} puntos comprometidos</strong><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>${editable ? '<p class="muted">Cada cambio se guarda automáticamente. Solo se pueden seleccionar historias estimadas de hasta 13 puntos.</p>' : ''}`);
+    const row = (story, included) => `<article class="planning-story"><div><strong>${escape(story.title)}</strong><small>${escape(story.priority)} · ${story.points ?? 'Sin estimar'} puntos${story.estimated_hours ? ` · ${story.estimated_hours} h` : ''}</small></div>${editable ? `<button class="quiet" data-selection="${story.id}" data-included="${included}" ${!included && (!story.points || story.points > 13) ? 'disabled' : ''} aria-label="${included ? 'Retirar' : 'Agregar'} ${escape(story.title)}">${included ? '−' : '+'}</button>` : ''}</article>`;
+    const canCapacity = state.user.role === 'Scrum Master' && !project.archived && sprint.status !== 'Cerrado';
+    const over = selected.capacity && selected.hours > selected.capacity;
+    const capacity = `<div class="capacity ${over ? 'over' : ''}"><div><small>Capacidad del equipo</small><strong>${selected.capacity ?? 'Sin definir'}${selected.capacity ? ' h' : ''}</strong></div><div><small>Comprometido</small><strong>${selected.points} puntos · ${selected.hours} h</strong></div><div><small>Disponible</small><strong>${selected.capacity ? `${Math.round((selected.capacity - selected.hours) * 10) / 10} h` : '—'}</strong></div>${canCapacity ? `<form id="capacity-form"><input name="hours" type="number" min="0.5" step="0.5" required aria-label="Capacidad en horas" placeholder="Horas" value="${selected.capacity ?? ''}"><button type="submit" class="quiet">Guardar capacidad</button></form>` : ''}</div>${over ? '<p class="form-error">Las horas comprometidas superan la capacidad del equipo.</p>' : ''}`;
+    dialog('Sprint Backlog', `<p class="muted">${escape(project.name)} · ${escape(sprint.name)}</p><p class="project-description">${escape(sprint.goal)}</p>${capacity}<div class="planning-columns"><section><h3>Product Backlog</h3>${available.length ? available.map(story => row(story, false)).join('') : '<p class="muted">No hay historias disponibles.</p>'}</section><section><h3>Historias seleccionadas</h3>${selected.stories.length ? selected.stories.map(story => row(story, true)).join('') : '<p class="muted">Aún no se han seleccionado historias.</p>'}</section></div><div class="planning-total"><strong>${selected.points} puntos comprometidos</strong><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>${editable ? '<p class="muted">Cada cambio se guarda automáticamente. Solo se pueden seleccionar historias estimadas de hasta 13 puntos.</p>' : ''}`);
     modal.classList.add('planning-modal');
     document.querySelector('#back-sprint-list').onclick = () => sprintsDialog(project);
+    const capacityForm = document.querySelector('#capacity-form');
+    if (capacityForm) capacityForm.onsubmit = async event => {
+      event.preventDefault();
+      try { await api(`/projects/${project.id}/sprints/${sprint.id}/capacity`, 'PATCH', { hours: Number(capacityForm.hours.value) }); flash('Capacidad guardada.'); }
+      catch (error) { flash(error.message); }
+      await planningDialog(project, sprint);
+    };
     document.querySelectorAll('[data-selection]').forEach(button => button.onclick = async () => {
       button.disabled = true;
       try {
