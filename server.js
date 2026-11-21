@@ -626,6 +626,18 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     });
     res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days, hours: { committed: plannedHours, logged, remaining: Math.max(Math.round((plannedHours - logged) * 100) / 100, 0), days: hourDays } });
   });
+  app.get('/api/projects/:id/burndown', auth, (req, res) => {
+    const project = projectFor(req);
+    const total = get('SELECT COALESCE(SUM(points),0) AS total FROM stories WHERE project_id=?', project.id).total;
+    const sprints = all("SELECT id,name,status,start_date,end_date,completed_points FROM sprints WHERE project_id=? AND status<>'En planificación' ORDER BY start_date,id", project.id);
+    let done = 0;
+    const steps = sprints.map(sprint => {
+      done += sprint.status === 'Cerrado' ? sprint.completed_points ?? 0 : sprintPoints(sprint.id).completed;
+      return { label: sprint.name, status: sprint.status, remaining: Math.max(total - done, 0) };
+    });
+    const days = [{ label: 'Inicio', remaining: total }, ...steps].map((step, index, list) => ({ date: step.label, label: step.label, ideal: Math.round(total * (1 - index / Math.max(list.length - 1, 1)) * 10) / 10, remaining: step.remaining }));
+    res.json({ project: project.name, committed: total, completed: Math.min(done, total), remaining: Math.max(total - done, 0), sprints: sprints.length, days });
+  });
   const assignable = project => {
     const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
     return team
