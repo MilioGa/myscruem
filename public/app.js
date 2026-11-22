@@ -63,12 +63,12 @@ async function load() {
   if (state.page === 'teams' && !manager) state.page = 'panel';
   render();
 }
-const navItems = [['backlog', '☰', 'Product Backlog', ['Product Owner', 'Scrum Master', 'Developer']], ['sprints', '◷', 'Sprints', ['Product Owner', 'Scrum Master', 'Developer']], ['board', '▥', 'Tablero Kanban', ['Product Owner', 'Scrum Master', 'Developer']], ['metrics', '↘', 'Métricas', ['Product Owner', 'Scrum Master']], ['impediments', '⚠', 'Impedimentos', ['Scrum Master', 'Developer']]];
+const navItems = [['backlog', '☰', 'Product Backlog', ['Product Owner', 'Scrum Master', 'Developer']], ['poker', '♠', 'Planning Poker', ['Product Owner', 'Scrum Master', 'Developer']], ['sprints', '◷', 'Sprints', ['Product Owner', 'Scrum Master', 'Developer']], ['board', '▥', 'Tablero Kanban', ['Product Owner', 'Scrum Master', 'Developer']], ['metrics', '↘', 'Métricas', ['Product Owner', 'Scrum Master']], ['impediments', '⚠', 'Impedimentos', ['Scrum Master', 'Developer']]];
 const panels = {
   Administrador: { title: 'Panel del Administrador', text: 'Gestiona usuarios, roles y proyectos de la empresa.', actions: [['page:users', '♧', 'Usuarios y roles', 'Invita personas y asigna su rol.'], ['page:projects', '▦', 'Proyectos', 'Consulta los proyectos de la empresa.']] },
   'Product Owner': { title: 'Panel del Product Owner', text: 'Define qué se construye y en qué orden.', actions: [['nav:backlog', '☰', 'Product Backlog', 'Crea, prioriza y ordena las historias.'], ['nav:metrics', '↘', 'Métricas', 'Revisa el avance del producto.'], ['page:projects', '▦', 'Proyectos', 'Crea y administra tus proyectos.']] },
   'Scrum Master': { title: 'Panel del Scrum Master', text: 'Facilita los eventos y elimina los impedimentos del equipo.', actions: [['nav:sprints', '◷', 'Sprints', 'Crea, inicia y cierra sprints.'], ['nav:impediments', '⚠', 'Impedimentos', 'Resuelve los bloqueos del equipo.'], ['nav:metrics', '↘', 'Métricas', 'Consulta el Burndown y la velocidad.'], ['page:teams', '♙', 'Equipos', 'Forma equipos con sus roles Scrum.']] },
-  Developer: { title: 'Panel del Developer', text: 'Construye el incremento y actualiza el avance de tus tareas.', actions: [['nav:board', '▥', 'Tablero Kanban', 'Mueve tus tarjetas y registra tu avance.'], ['nav:backlog', '☰', 'Estimar historias', 'Asigna puntos a las historias.'], ['nav:impediments', '⚠', 'Impedimentos', 'Registra lo que te bloquea.']] }
+  Developer: { title: 'Panel del Developer', text: 'Construye el incremento y actualiza el avance de tus tareas.', actions: [['nav:board', '▥', 'Tablero Kanban', 'Mueve tus tarjetas y registra tu avance.'], ['nav:poker', '♠', 'Planning Poker', 'Vota la estimación con el equipo.'], ['nav:impediments', '⚠', 'Impedimentos', 'Registra lo que te bloquea.']] }
 };
 const activeProjects = () => state.projects.filter(project => !project.archived);
 const currentProject = () => {
@@ -82,6 +82,7 @@ async function openNav(key) {
   if (key === 'sprints') return sprintsDialog(project);
   if (key === 'board') return boardDialog(project);
   if (key === 'impediments') return impedimentsDialog(project);
+  if (key === 'poker') return pokerDialog(project);
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
     const sprint = sprints.find(item => item.status === 'Activo') || sprints.find(item => item.status === 'Cerrado') || sprints[0];
@@ -112,7 +113,9 @@ async function renderTraining() {
     state.training ||= await api('/training');
     const guide = state.training;
     const module = guide.modules.find(item => item.id === state.trainingModule) || guide.modules[0];
-    target.innerHTML = `<p class="training-intro">${escape(guide.intro)}</p><div class="training"><nav class="training-modules" aria-label="Módulos de la guía">${guide.modules.map(item => `<button data-module="${item.id}" class="${item.id === module.id && !['infografias', 'glosario'].includes(state.trainingModule) ? 'selected' : ''}">${escape(item.title)}</button>`).join('')}<button data-module="infografias" class="${state.trainingModule === 'infografias' ? 'selected' : ''}">Infografías</button><button data-module="glosario" class="${state.trainingModule === 'glosario' ? 'selected' : ''}">Glosario (${guide.terms} términos)</button></nav><section class="training-body" id="training-body"></section></div>`;
+    const progress = guide.progress;
+    const percent = Math.round(progress.completed.length * 100 / guide.modules.length);
+    target.innerHTML = `<p class="training-intro">${escape(guide.intro)}</p><div class="progress tutorial-progress"><div class="progress-bar"><span style="width:${percent}%"></span></div><strong>${percent} %</strong><small>${progress.finished ? '¡Completaste el tutorial teórico de Scrum!' : `${progress.completed.length} de ${guide.modules.length} secciones del tutorial completadas`}</small></div><div class="training"><nav class="training-modules" aria-label="Módulos de la guía">${guide.modules.map(item => `<button data-module="${item.id}" class="${item.id === module.id && !['infografias', 'glosario'].includes(state.trainingModule) ? 'selected' : ''}">${progress.completed.includes(item.id) ? '✓ ' : ''}${escape(item.title)}</button>`).join('')}<button data-module="infografias" class="${state.trainingModule === 'infografias' ? 'selected' : ''}">Infografías</button><button data-module="glosario" class="${state.trainingModule === 'glosario' ? 'selected' : ''}">Glosario (${guide.terms} términos)</button></nav><section class="training-body" id="training-body"></section></div>`;
     const body = document.querySelector('#training-body');
     if (state.trainingModule === 'infografias') {
       body.innerHTML = `<h2>Infografías</h2><div class="infographics">${guide.infographics.map(item => `<figure><img src="${escape(item.src)}" alt="${escape(item.alt)}"><figcaption>${escape(item.title)}</figcaption></figure>`).join('')}</div>`;
@@ -125,7 +128,21 @@ async function renderTraining() {
       document.querySelector('#glossary-search').oninput = event => { state.glossaryQuery = event.target.value; clearTimeout(timer); timer = setTimeout(() => search().catch(error => flash(error.message)), 200); };
       await search();
     } else {
-      body.innerHTML = `<h2>${escape(module.title)}</h2><p class="muted">${escape(module.summary)}</p>${module.sections.map(section => `<article class="training-section"><h3>${escape(section.title)}</h3><p>${escape(section.body)}</p></article>`).join('')}`;
+      const index = guide.modules.indexOf(module);
+      const next = guide.modules[index + 1];
+      const done = progress.completed.includes(module.id);
+      body.innerHTML = `<h2>${escape(module.title)}</h2><p class="muted">${escape(module.summary)}</p>${module.sections.map(section => `<article class="training-section"><h3>${escape(section.title)}</h3><p>${escape(section.body)}</p></article>`).join('')}<div class="story-actions"><span class="muted">${done ? '✓ Sección completada' : `Sección ${index + 1} de ${guide.modules.length}`}</span><button id="complete-module" class="primary">${done ? (next ? 'Ir a la siguiente sección' : 'Volver al inicio') : next ? 'Marcar como leída y continuar' : 'Terminar el tutorial'}</button></div>`;
+      document.querySelector('#complete-module').onclick = async event => {
+        event.target.disabled = true;
+        try {
+          if (!done) {
+            state.training.progress = await api('/training/progress', 'POST', { moduleId: module.id });
+            if (state.training.progress.finished) flash('¡Completaste el tutorial teórico de Scrum!');
+          }
+          state.trainingModule = next ? next.id : guide.modules[0].id;
+          await renderTraining();
+        } catch (error) { event.target.disabled = false; flash(error.message); }
+      };
     }
     document.querySelectorAll('[data-module]').forEach(button => button.onclick = () => { state.trainingModule = button.dataset.module; renderTraining(); });
   } catch (error) { target.innerHTML = ''; flash(error.message); }
@@ -173,7 +190,15 @@ function renderPanel() {
   const panel = panels[state.user.role];
   const project = currentProject();
   const target = document.querySelector('#page-content');
-  target.innerHTML = `<p class="muted">${project ? `Proyecto actual: <strong>${escape(project.name)}</strong>` : 'Todavía no hay proyectos activos.'}</p><div class="panel-grid">${panel.actions.map(([action, icon, label, text]) => `<button class="panel-card" data-panel="${action}"><span>${icon}</span><strong>${escape(label)}</strong><small>${escape(text)}</small></button>`).join('')}</div>`;
+  target.innerHTML = `<p class="muted">${project ? `Proyecto actual: <strong>${escape(project.name)}</strong>` : 'Todavía no hay proyectos activos.'}</p><div class="panel-grid">${panel.actions.map(([action, icon, label, text]) => `<button class="panel-card" data-panel="${action}"><span>${icon}</span><strong>${escape(label)}</strong><small>${escape(text)}</small></button>`).join('')}</div><div id="panel-sprint"></div>`;
+  if (state.user.role === 'Developer' && project) {
+    api(`/projects/${project.id}/board`).then(board => {
+      const box = document.querySelector('#panel-sprint');
+      if (!box) return;
+      const mine = board.tasks.filter(task => task.assignee_id === state.user.id);
+      box.innerHTML = `<section class="panel-sprint"><h2>${board.sprint ? `Historias de ${escape(board.sprint.name)}` : 'Sin sprint activo'}</h2>${board.sprint ? `<p class="muted">${escape(board.sprint.goal)} · ${mine.length} ${mine.length === 1 ? 'tarea asignada' : 'tareas asignadas'} a ti</p><div class="panel-stories">${board.stories.map(story => `<article class="planning-story"><div><strong>HU-${story.id} · ${escape(story.title)}</strong><small>${story.points ?? 0} puntos · ${board.tasks.filter(task => task.story_id === story.id).length} tareas · tuyas: ${mine.filter(task => task.story_id === story.id).length}</small></div>${badge(story.completed ? 'Terminada' : 'En curso', story.completed ? 'green' : '')}</article>`).join('') || '<p class="muted">El sprint no tiene historias.</p>'}</div>` : '<p class="muted">Cuando el Scrum Master inicie un sprint verás aquí sus historias.</p>'}</section>`;
+    }).catch(() => {});
+  }
   document.querySelectorAll('[data-panel]').forEach(button => button.onclick = () => {
     const [kind, key] = button.dataset.panel.split(':');
     if (kind === 'page') { state.page = key; state.query = ''; render(); }
@@ -369,7 +394,7 @@ async function storiesDialog(project) {
 async function storyTasksDialog(project, storyId) {
   try {
     const detail = await api(`/projects/${project.id}/stories/${storyId}/tasks`);
-    dialog(`HU-${detail.story.id} · ${detail.story.title}`, `<p class="muted">${escape(project.name)} · ${detail.story.points ?? 'Sin estimar'} puntos</p><div class="progress"><div class="progress-bar"><span style="width:${detail.progress}%"></span></div><strong>${detail.progress} %</strong><small>${detail.done} de ${detail.total} tareas terminadas</small></div>${detail.tasks.length ? `<div class="table-wrap"><table><thead><tr><th>Tarea</th><th>Responsable</th><th>Sprint</th><th>Estado</th></tr></thead><tbody>${detail.tasks.map(task => `<tr><td>${escape(task.title)}</td><td>${escape(task.assignee)}</td><td>${escape(task.sprint)}</td><td>${badge(task.status, task.status === 'Terminado' ? 'green' : '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">La historia todavía no tiene tareas. Se crean desde el tablero del sprint activo.</p>'}<div class="story-actions"><button id="back-stories" class="quiet">Volver al backlog</button></div>`);
+    dialog(`HU-${detail.story.id} · ${detail.story.title}`, `<p class="muted">${escape(project.name)} · ${detail.story.points ?? 'Sin estimar'} puntos</p><div class="progress"><div class="progress-bar"><span style="width:${detail.progress}%"></span></div><strong>${detail.progress} %</strong><small>${detail.done} de ${detail.total} tareas terminadas · ${detail.hours} h reales${detail.story.estimated_hours ? ` de ${detail.story.estimated_hours} h estimadas` : ''}</small></div>${detail.tasks.length ? `<div class="table-wrap"><table><thead><tr><th>Tarea</th><th>Responsable</th><th>Sprint</th><th>Horas reales</th><th>Estado</th></tr></thead><tbody>${detail.tasks.map(task => `<tr><td>${escape(task.title)}</td><td>${escape(task.assignee)}</td><td>${escape(task.sprint)}</td><td>${task.hours} h</td><td>${badge(task.status, task.status === 'Terminado' ? 'green' : '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">La historia todavía no tiene tareas. Se crean desde el tablero del sprint activo.</p>'}<div class="story-actions"><button id="back-stories" class="quiet">Volver al backlog</button></div>`);
     modal.classList.add('wide-modal');
     document.querySelector('#back-stories').onclick = () => storiesDialog(project);
   } catch (error) { flash(error.message); }
@@ -459,19 +484,22 @@ async function closeDialog(project, sprint) {
     };
   } catch (error) { flash(error.message); }
 }
-async function meetingsDialog(project, sprint) {
+async function meetingsDialog(project, sprint, editing) {
   try {
     const meetings = await api(`/projects/${project.id}/sprints/${sprint.id}/meetings`);
     const canEdit = state.user.role === 'Scrum Master' && !project.archived;
     const today = new Date().toLocaleDateString('en-CA');
-    const list = meetings.length ? meetings.map(meeting => `<article class="meeting"><div class="card-top"><div>${badge(meeting.type, meeting.type === 'Retrospectiva' ? 'green' : '')} <strong>${escape(meeting.date)}</strong></div><small class="muted">Registró ${escape(meeting.author)}</small></div>${meeting.attendees ? `<p class="muted">Asistentes: ${escape(meeting.attendees)}</p>` : ''}<p class="meeting-notes">${escape(meeting.notes)}</p>${meeting.agreements.length ? `<strong>Acuerdos</strong><div class="agreements">${meeting.agreements.map(item => `<label class="check ${item.done ? 'done' : ''}"><input type="checkbox" data-agreement="${item.id}" ${item.done ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> ${escape(item.text)}${item.done ? ` <small>(atendido por ${escape(item.done_by)}, ${escape(item.done_at.slice(0, 10))})</small>` : ''}</label>`).join('')}</div>` : ''}</article>`).join('') : '<p class="muted">Todavía no hay actas registradas para este sprint.</p>';
-    dialog(`Actas · ${sprint.name}`, `<p class="muted">${escape(project.name)} · Daily, Revisión y Retrospectiva</p><div class="meeting-list">${list}</div>${canEdit ? `<form class="meeting-form"><h3>Nueva acta</h3><div class="form-row"><label>Evento<select name="type"><option>Daily</option><option>Revisión</option><option>Retrospectiva</option></select></label>${field('Fecha', 'date', 'date', today)}</div><label>Asistentes<input name="attendees" maxlength="500" placeholder="Opcional, por ejemplo: todo el equipo"></label><label>Notas<textarea name="notes" required maxlength="3000" rows="4" placeholder="Temas tratados, avances y bloqueos"></textarea></label><label>Acuerdos (uno por línea)<textarea name="agreements" maxlength="6000" rows="3" placeholder="Opcional"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-sprint-list" class="quiet">Volver a sprints</button><button type="submit" class="primary">Guardar acta</button></div></form>` : '<div class="story-actions"><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>'}`, async data => {
-      await api(`/projects/${project.id}/sprints/${sprint.id}/meetings`, 'POST', { ...data, agreements: data.agreements.split('\n').map(item => item.trim()).filter(Boolean) });
-      flash('Acta registrada.');
+    const list = meetings.length ? meetings.map(meeting => `<article class="meeting"><div class="card-top"><div>${badge(meeting.type, meeting.type === 'Retrospectiva' ? 'green' : '')} <strong>${escape(meeting.date)}</strong></div><small class="muted">Registró ${escape(meeting.author)}${canEdit ? ` · <button class="quiet" data-edit-meeting="${meeting.id}">Editar</button>` : ''}</small></div>${meeting.attendees ? `<p class="muted">Asistentes: ${escape(meeting.attendees)}</p>` : ''}<p class="meeting-notes">${escape(meeting.notes)}</p>${meeting.agreements.length ? `<strong>Acuerdos</strong><div class="agreements">${meeting.agreements.map(item => `<label class="check ${item.done ? 'done' : ''}"><input type="checkbox" data-agreement="${item.id}" ${item.done ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> ${escape(item.text)}${item.done ? ` <small>(atendido por ${escape(item.done_by)}, ${escape(item.done_at.slice(0, 10))})</small>` : ''}</label>`).join('')}</div>` : ''}</article>`).join('') : '<p class="muted">Todavía no hay actas registradas para este sprint.</p>';
+    const current = meetings.find(meeting => meeting.id === editing);
+    dialog(`Actas · ${sprint.name}`, `<p class="muted">${escape(project.name)} · Planning, Daily, Revisión y Retrospectiva${canEdit ? '' : ' · Solo lectura: el Scrum Master registra y edita las reuniones.'}</p><div class="meeting-list">${list}</div>${canEdit ? `<form class="meeting-form"><h3>${current ? 'Editar reunión' : 'Nueva acta'}</h3><div class="form-row"><label>Evento<select name="type">${['Planning', 'Daily', 'Revisión', 'Retrospectiva'].map(type => `<option ${current?.type === type ? 'selected' : ''}>${type}</option>`).join('')}</select></label>${field('Fecha', 'date', 'date', current?.date || today)}</div><label>Asistentes<input name="attendees" maxlength="500" placeholder="Opcional, por ejemplo: todo el equipo" value="${escape(current?.attendees || '')}"></label><label>Notas<textarea name="notes" required maxlength="3000" rows="4" placeholder="Temas tratados, avances y bloqueos">${escape(current?.notes || '')}</textarea></label>${current ? '' : '<label>Acuerdos (uno por línea)<textarea name="agreements" maxlength="6000" rows="3" placeholder="Opcional"></textarea></label>'}<p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-sprint-list" class="quiet">${current ? 'Cancelar' : 'Volver a sprints'}</button><button type="submit" class="primary">${current ? 'Guardar cambios' : 'Guardar acta'}</button></div></form>` : '<div class="story-actions"><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>'}`, async data => {
+      if (current) await api(`/projects/${project.id}/meetings/${current.id}`, 'PATCH', data);
+      else await api(`/projects/${project.id}/sprints/${sprint.id}/meetings`, 'POST', { ...data, agreements: data.agreements.split('\n').map(item => item.trim()).filter(Boolean) });
+      flash(current ? 'Reunión actualizada.' : 'Acta registrada.');
       await meetingsDialog(project, sprint);
     });
     modal.classList.add('wide-modal');
-    document.querySelector('#back-sprint-list').onclick = () => sprintsDialog(project);
+    document.querySelector('#back-sprint-list').onclick = () => current ? meetingsDialog(project, sprint) : sprintsDialog(project);
+    document.querySelectorAll('[data-edit-meeting]').forEach(button => button.onclick = () => meetingsDialog(project, sprint, Number(button.dataset.editMeeting)));
     document.querySelectorAll('[data-agreement]').forEach(input => input.onchange = async () => {
       input.disabled = true;
       try { await api(`/projects/${project.id}/agreements/${input.dataset.agreement}`, 'PATCH', { done: input.checked }); }
@@ -494,10 +522,20 @@ async function planningDialog(project, sprint) {
     const allStories = await api(`/projects/${project.id}/stories`);
     const available = allStories.filter(story => !story.sprint_id);
     const editable = state.user.role === 'Developer' && !project.archived && sprint.status === 'En planificación';
-    const row = (story, included) => `<article class="planning-story"><div><strong>${escape(story.title)}</strong><small>${escape(story.priority)} · ${story.points ?? 'Sin estimar'} puntos</small></div>${editable ? `<button class="quiet" data-selection="${story.id}" data-included="${included}" ${!included && (!story.points || story.points > 13) ? 'disabled' : ''} aria-label="${included ? 'Retirar' : 'Agregar'} ${escape(story.title)}">${included ? '−' : '+'}</button>` : ''}</article>`;
-    dialog('Sprint Backlog', `<p class="muted">${escape(project.name)} · ${escape(sprint.name)}</p><p class="project-description">${escape(sprint.goal)}</p><div class="planning-columns"><section><h3>Product Backlog</h3>${available.length ? available.map(story => row(story, false)).join('') : '<p class="muted">No hay historias disponibles.</p>'}</section><section><h3>Historias seleccionadas</h3>${selected.stories.length ? selected.stories.map(story => row(story, true)).join('') : '<p class="muted">Aún no se han seleccionado historias.</p>'}</section></div><div class="planning-total"><strong>${selected.points} puntos comprometidos</strong><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>${editable ? '<p class="muted">Cada cambio se guarda automáticamente. Solo se pueden seleccionar historias estimadas de hasta 13 puntos.</p>' : ''}`);
+    const row = (story, included) => `<article class="planning-story"><div><strong>${escape(story.title)}</strong><small>${escape(story.priority)} · ${story.points ?? 'Sin estimar'} puntos${story.estimated_hours ? ` · ${story.estimated_hours} h` : ''}</small></div>${editable ? `<button class="quiet" data-selection="${story.id}" data-included="${included}" ${!included && (!story.points || story.points > 13) ? 'disabled' : ''} aria-label="${included ? 'Retirar' : 'Agregar'} ${escape(story.title)}">${included ? '−' : '+'}</button>` : ''}</article>`;
+    const canCapacity = state.user.role === 'Scrum Master' && !project.archived && sprint.status !== 'Cerrado';
+    const over = selected.capacity && selected.hours > selected.capacity;
+    const capacity = `<div class="capacity ${over ? 'over' : ''}"><div><small>Capacidad del equipo</small><strong>${selected.capacity ?? 'Sin definir'}${selected.capacity ? ' h' : ''}</strong></div><div><small>Comprometido</small><strong>${selected.points} puntos · ${selected.hours} h</strong></div><div><small>Disponible</small><strong>${selected.capacity ? `${Math.round((selected.capacity - selected.hours) * 10) / 10} h` : '—'}</strong></div>${canCapacity ? `<form id="capacity-form"><input name="hours" type="number" min="0.5" step="0.5" required aria-label="Capacidad en horas" placeholder="Horas" value="${selected.capacity ?? ''}"><button type="submit" class="quiet">Guardar capacidad</button></form>` : ''}</div>${over ? '<p class="form-error">Las horas comprometidas superan la capacidad del equipo.</p>' : ''}`;
+    dialog('Sprint Backlog', `<p class="muted">${escape(project.name)} · ${escape(sprint.name)}</p><p class="project-description">${escape(sprint.goal)}</p>${capacity}<div class="planning-columns"><section><h3>Product Backlog</h3>${available.length ? available.map(story => row(story, false)).join('') : '<p class="muted">No hay historias disponibles.</p>'}</section><section><h3>Historias seleccionadas</h3>${selected.stories.length ? selected.stories.map(story => row(story, true)).join('') : '<p class="muted">Aún no se han seleccionado historias.</p>'}</section></div><div class="planning-total"><strong>${selected.points} puntos comprometidos</strong><button id="back-sprint-list" class="quiet">Volver a sprints</button></div>${editable ? '<p class="muted">Cada cambio se guarda automáticamente. Solo se pueden seleccionar historias estimadas de hasta 13 puntos.</p>' : ''}`);
     modal.classList.add('planning-modal');
     document.querySelector('#back-sprint-list').onclick = () => sprintsDialog(project);
+    const capacityForm = document.querySelector('#capacity-form');
+    if (capacityForm) capacityForm.onsubmit = async event => {
+      event.preventDefault();
+      try { await api(`/projects/${project.id}/sprints/${sprint.id}/capacity`, 'PATCH', { hours: Number(capacityForm.hours.value) }); flash('Capacidad guardada.'); }
+      catch (error) { flash(error.message); }
+      await planningDialog(project, sprint);
+    };
     document.querySelectorAll('[data-selection]').forEach(button => button.onclick = async () => {
       button.disabled = true;
       try {
@@ -518,7 +556,8 @@ async function boardDialog(project) {
     }
     const stories = new Map(board.stories.map(story => [story.id, story]));
     const canMove = state.user.role === 'Developer' && !project.archived;
-    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''}" data-task="${task.id}" draggable="${canMove && !task.impediment}" ${task.impediment ? 'title="No se puede mover hasta resolver el impedimento"' : ''}><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}<small>Bloqueada: no se puede mover hasta resolverlo.</small></p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}${task.comments || task.attachments ? `<div class="task-meta">${task.comments ? `<span>💬 ${task.comments}</span>` : ''}${task.attachments ? `<span>📎 ${task.attachments}</span>` : ''}</div>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
+    const own = task => canMove && task.assignee_id === state.user.id;
+    const card = task => `<article class="task-card ${task.impediment ? 'blocked' : ''} ${canMove && !own(task) ? 'foreign' : ''}" data-task="${task.id}" draggable="${own(task) && !task.impediment}" ${task.impediment ? 'title="No se puede mover hasta resolver el impedimento"' : canMove && !own(task) ? 'title="Solo su responsable puede moverla"' : ''}><strong>${escape(task.title)}</strong><small>HU-${task.story_id} · ${escape(stories.get(task.story_id)?.title || '')}</small><div class="task-story"><span class="chip">${stories.get(task.story_id)?.points ?? 0} pts</span>${stories.get(task.story_id)?.epic ? `<span class="chip epic-chip" style="--epic:${escape(stories.get(task.story_id).epic_color)}">${escape(stories.get(task.story_id).epic)}</span>` : ''}<span class="chip">⏱ ${task.hours} h</span></div><div class="task-tags"><span class="chip type-${escape(task.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())}">${escape(task.type)}</span>${task.label ? `<span class="chip">${escape(task.label)}</span>` : ''}</div>${task.impediment ? `<p class="impediment-note"><strong>⚠ Impedimento:</strong> ${escape(task.impediment)}<small>Bloqueada: no se puede mover hasta resolverlo.</small></p>` : canMove && task.status !== 'Terminado' ? `<button class="quiet impediment-button" data-impediment="${task.id}">⚠ Registrar impedimento</button>` : ''}${own(task) ? `<button class="quiet impediment-button" data-hours="${task.id}">⏱ Registrar horas</button>` : ''}${task.comments || task.attachments ? `<div class="task-meta">${task.comments ? `<span>💬 ${task.comments}</span>` : ''}${task.attachments ? `<span>📎 ${task.attachments}</span>` : ''}</div>` : ''}<div class="task-owner"><span class="avatar">${escape(task.assignee.slice(0, 1).toUpperCase())}</span>${escape(task.assignee)}</div></article>`;
     const filters = state.boardFilters?.project === project.id ? state.boardFilters : { project: project.id, assignee: '', label: '', type: '' };
     state.boardFilters = filters;
     const visible = board.tasks.filter(task => (!filters.assignee || task.assignee_id === Number(filters.assignee)) && (!filters.label || task.label === filters.label) && (!filters.type || task.type === filters.type));
@@ -540,6 +579,7 @@ async function boardDialog(project) {
       taskDetail(project, board, board.tasks.find(task => task.id === Number(item.dataset.task)));
     }));
     document.querySelectorAll('[data-impediment]').forEach(button => button.onclick = event => { event.stopPropagation(); clearInterval(boardTimer); impedimentForm(project, board.tasks.find(task => task.id === Number(button.dataset.impediment))); });
+    document.querySelectorAll('[data-hours]').forEach(button => button.onclick = event => { event.stopPropagation(); clearInterval(boardTimer); hoursForm(project, board.tasks.find(task => task.id === Number(button.dataset.hours))); });
     document.querySelectorAll('[data-filter-board]').forEach(input => input.onchange = () => { filters[input.dataset.filterBoard] = input.value; boardDialog(project); });
     document.querySelector('#clear-filters').onclick = () => { Object.assign(filters, { assignee: '', label: '', type: '' }); boardDialog(project); };
     document.querySelector('#board-impediments').onclick = () => { clearInterval(boardTimer); impedimentsDialog(project, 'board'); };
@@ -593,7 +633,7 @@ async function impedimentsDialog(project, from = 'nav', status = 'Abierto') {
     clearInterval(boardTimer);
     const items = await api(`/projects/${project.id}/impediments?status=${encodeURIComponent(status)}`);
     const canClose = state.user.role === 'Scrum Master' && !project.archived;
-    dialog('Impedimentos', `<p class="muted">${escape(project.name)}</p><div class="tabs"><button data-imp-status="Abierto" class="${status === 'Abierto' ? 'active' : ''}">Abiertos</button><button data-imp-status="Cerrado" class="${status === 'Cerrado' ? 'active' : ''}">Cerrados</button></div>${items.length ? `<div class="impediment-list">${items.map(item => `<article class="impediment ${item.status === 'Abierto' ? 'open' : ''}"><div class="card-top"><strong>${escape(item.task)}</strong>${badge(item.status, item.status === 'Cerrado' ? 'green' : '')}</div><p>${escape(item.description)}</p><small class="muted">HU-${item.story_id} · ${escape(item.sprint)} · Reportó ${escape(item.reported_by)} el ${escape(item.created_at.slice(0, 10))}</small>${item.status === 'Cerrado' ? `<p class="solution"><strong>Solución:</strong> ${escape(item.solution)} <small>(${escape(item.closed_by)}, ${escape(item.closed_at.slice(0, 10))})</small></p>` : canClose ? `<form class="close-impediment" data-close-impediment="${item.id}"><input name="solution" required maxlength="500" placeholder="¿Cómo se resolvió?"><button type="submit" class="primary">Cerrar impedimento</button></form>` : ''}</article>`).join('')}</div>` : `<section class="empty"><h2>${status === 'Abierto' ? 'No hay impedimentos abiertos' : 'No hay impedimentos cerrados'}</h2><p>${status === 'Abierto' ? 'Cuando un Developer registre un bloqueo aparecerá aquí.' : 'Los impedimentos resueltos se conservan en este historial.'}</p></section>`}${from === 'board' ? '<div class="story-actions"><button id="back-board" class="quiet">Volver al tablero</button></div>' : ''}`);
+    dialog('Impedimentos', `<p class="muted">${escape(project.name)}</p><div class="tabs"><button data-imp-status="Abierto" class="${status === 'Abierto' ? 'active' : ''}">Abiertos</button><button data-imp-status="Cerrado" class="${status === 'Cerrado' ? 'active' : ''}">Cerrados</button><button data-imp-status="Todos" class="${status === 'Todos' ? 'active' : ''}">Historial completo</button></div>${items.length ? `<div class="impediment-list">${items.map(item => `<article class="impediment ${item.status === 'Abierto' ? 'open' : ''}"><div class="card-top"><strong>${escape(item.task)}</strong>${badge(item.status, item.status === 'Cerrado' ? 'green' : '')}</div><p>${escape(item.description)}</p><small class="muted">HU-${item.story_id} · ${escape(item.sprint)} · Reportó ${escape(item.reported_by)} el ${escape(item.created_at.slice(0, 10))}</small>${item.status === 'Cerrado' ? `<p class="solution"><strong>Solución:</strong> ${escape(item.solution)} <small>(${escape(item.closed_by)}, ${escape(item.closed_at.slice(0, 10))})</small></p>` : canClose ? `<form class="close-impediment" data-close-impediment="${item.id}"><input name="solution" required maxlength="500" placeholder="¿Cómo se resolvió?"><button type="submit" class="primary">Cerrar impedimento</button></form>` : ''}</article>`).join('')}</div>` : `<section class="empty"><h2>${status === 'Abierto' ? 'No hay impedimentos abiertos' : status === 'Cerrado' ? 'No hay impedimentos cerrados' : 'No hay impedimentos registrados'}</h2><p>${status === 'Abierto' ? 'Cuando un Developer registre un bloqueo aparecerá aquí.' : 'Los impedimentos resueltos se conservan en este historial.'}</p></section>`}${from === 'board' ? '<div class="story-actions"><button id="back-board" class="quiet">Volver al tablero</button></div>' : ''}`);
     document.querySelector('#back-board')?.addEventListener('click', () => boardDialog(project));
     document.querySelectorAll('[data-imp-status]').forEach(button => button.onclick = () => impedimentsDialog(project, from, button.dataset.impStatus));
     document.querySelectorAll('[data-close-impediment]').forEach(form => form.onsubmit = async event => {
@@ -642,6 +682,14 @@ async function taskDetail(project, board, task) {
     });
   } catch (error) { flash(error.message); }
 }
+function hoursForm(project, task) {
+  dialog('Registrar horas reales', `<form><p class="muted">Tarea: ${escape(task.title)} · Llevas ${task.hours} h registradas.</p><label>Horas trabajadas hoy<input name="hours" type="number" min="0.25" max="24" step="0.25" required placeholder="Por ejemplo: 4"></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver</button><button type="submit" class="primary">Guardar horas</button></div></form>`, async data => {
+    await api(`/projects/${project.id}/tasks/${task.id}/hours`, 'POST', { hours: Number(data.hours) });
+    await boardDialog(project);
+    flash('Horas registradas.');
+  });
+  document.querySelector('#back-board').onclick = () => boardDialog(project);
+}
 function impedimentForm(project, task) {
   dialog('Registrar impedimento', `<form><p class="muted">Tarea: ${escape(task.title)}</p><label>¿Qué impide avanzar?<textarea name="description" required maxlength="500" rows="4" placeholder="Describe el bloqueo y lo que necesitas para resolverlo"></textarea></label><p class="form-error" role="alert"></p><div class="story-actions"><button type="button" id="back-board" class="quiet">Volver</button><button type="submit" class="primary">Registrar impedimento</button></div></form>`, async data => {
     await api(`/projects/${project.id}/tasks/${task.id}/impediments`, 'POST', data);
@@ -659,14 +707,67 @@ function taskForm(project, board) {
   });
   document.querySelector('#back-board').onclick = () => boardDialog(project);
 }
-function burndownChart(data) {
+async function pokerDialog(project, sessionId) {
+  try {
+    clearInterval(boardTimer);
+    const isMaster = state.user.role === 'Scrum Master' && !project.archived;
+    if (!sessionId) {
+      const [sessions, stories] = await Promise.all([api(`/projects/${project.id}/poker`), api(`/projects/${project.id}/stories`)]);
+      const open = new Set(sessions.map(session => session.story_id));
+      dialog('Planning Poker', `<p class="muted">${escape(project.name)} · Estimación en equipo con cartas Fibonacci</p>${sessions.length ? `<div class="story-list">${sessions.map(session => `<article class="planning-story"><div><strong>HU-${session.story_id} · ${escape(session.title)}</strong><small>Ronda ${session.round} · ${escape(session.status)} · ${session.votes} ${session.votes === 1 ? 'voto' : 'votos'}</small></div><button class="primary" data-poker="${session.id}">Entrar</button></article>`).join('')}</div>` : '<section class="empty"><h2>No hay votaciones abiertas</h2><p>El Scrum Master abre una sesión para cada historia que se va a estimar.</p></section>'}${isMaster ? `<form class="poker-open"><h3>Abrir votación</h3><label>Historia<select name="storyId" required>${stories.filter(story => !open.has(story.id)).map(story => `<option value="${story.id}">HU-${story.id} · ${escape(story.title)} (${story.points ?? 'sin estimar'})</option>`).join('')}</select></label><p class="form-error" role="alert"></p><button type="submit" class="primary">Abrir Planning Poker</button></form>` : ''}`, isMaster ? async data => {
+        const created = await api(`/projects/${project.id}/poker`, 'POST', { storyId: Number(data.storyId) });
+        flash('Votación abierta. El equipo recibió una notificación.');
+        await pokerDialog(project, created.id);
+      } : undefined);
+      document.querySelectorAll('[data-poker]').forEach(button => button.onclick = () => pokerDialog(project, Number(button.dataset.poker)));
+      return;
+    }
+    const session = await api(`/projects/${project.id}/poker/${sessionId}`);
+    if (session.status === 'Cerrada') { flash(`Estimación guardada: ${session.points} puntos y ${session.hours} horas.`); return pokerDialog(project); }
+    const voting = session.status === 'Votando';
+    const counts = session.votes.reduce((map, vote) => map.set(vote.value, (map.get(vote.value) || 0) + 1), new Map());
+    const common = [...counts.entries()].filter(([value]) => value && value !== '?').sort((a, b) => b[1] - a[1])[0]?.[0];
+    const canVote = voting && state.user.role !== 'Administrador' && !project.archived;
+    dialog('Planning Poker', `<p class="muted">${escape(project.name)} · Ronda ${session.round} · ${voting ? 'Votación en curso: los votos están ocultos' : 'Votos revelados'}</p><article class="poker-story"><strong>HU-${session.story_id} · ${escape(session.title)}</strong><p>Como ${escape(session.actor)}, quiero ${escape(session.goal)}, para ${escape(session.benefit)}.</p></article>${canVote ? `<div class="poker-cards">${session.cards.map(card => `<button class="poker-card ${session.mine === card ? 'chosen' : ''}" data-card="${card}">${card}</button>`).join('')}</div><p class="muted">${session.mine ? `Tu voto: ${escape(session.mine)}. Puedes cambiarlo hasta que se revele.` : 'Elige una carta.'}</p>` : ''}<h3>Votos (${session.votes.length})</h3><div class="poker-votes">${session.votes.map(vote => `<div class="poker-vote ${voting ? '' : 'revealed'}"><span>${voting ? '✓' : escape(vote.value)}</span><small>${escape(vote.name)}</small></div>`).join('') || '<p class="muted">Todavía nadie ha votado.</p>'}</div>${!voting && counts.size > 1 ? '<p class="form-error">Los votos son distintos. Comenten sus razones y voten otra ronda.</p>' : ''}${isMaster ? `<div class="story-actions">${voting ? `<button id="reveal" class="primary" ${session.votes.length ? '' : 'disabled'}>Revelar votos</button>` : '<button id="new-round" class="quiet">Votar otra ronda</button>'}</div>${voting ? '' : `<form class="poker-confirm"><h3>Guardar estimación acordada</h3><div class="form-row"><label>Puntos<select name="points">${[1, 2, 3, 5, 8, 13, 21].map(points => `<option ${String(points) === common ? 'selected' : ''}>${points}</option>`).join('')}</select></label><label>Horas estimadas<input name="hours" type="number" min="0.5" max="999" step="0.5" required></label></div><p class="form-error" role="alert"></p><button type="submit" class="primary">Confirmar estimación</button></form>`}` : ''}<div class="story-actions"><button id="back-poker" class="quiet">Volver a las votaciones</button></div>`, isMaster && !voting ? async data => {
+      const result = await api(`/projects/${project.id}/poker/${session.id}/confirm`, 'POST', { points: Number(data.points), hours: Number(data.hours) });
+      flash(`Estimación guardada: ${result.points} puntos y ${result.hours} horas.`);
+      await pokerDialog(project);
+    } : undefined);
+    modal.classList.add('wide-modal', 'poker-modal');
+    document.querySelector('#back-poker').onclick = () => pokerDialog(project);
+    document.querySelectorAll('[data-card]').forEach(button => button.onclick = async () => {
+      try { await api(`/projects/${project.id}/poker/${session.id}/vote`, 'POST', { value: button.dataset.card }); }
+      catch (error) { flash(error.message); }
+      await pokerDialog(project, session.id);
+    });
+    document.querySelector('#reveal')?.addEventListener('click', async () => {
+      try { await api(`/projects/${project.id}/poker/${session.id}/reveal`, 'POST'); } catch (error) { flash(error.message); }
+      await pokerDialog(project, session.id);
+    });
+    document.querySelector('#new-round')?.addEventListener('click', async () => {
+      try { await api(`/projects/${project.id}/poker/${session.id}/round`, 'POST'); } catch (error) { flash(error.message); }
+      await pokerDialog(project, session.id);
+    });
+    const snapshot = JSON.stringify([session.status, session.round, session.votes.length]);
+    boardTimer = setInterval(async () => {
+      if (!modal.open || !modal.classList.contains('poker-modal')) return clearInterval(boardTimer);
+      if (modal.querySelector('.poker-confirm input:focus')) return;
+      try {
+        const current = await api(`/projects/${project.id}/poker/${session.id}`);
+        if (JSON.stringify([current.status, current.round, current.votes.length]) !== snapshot) { clearInterval(boardTimer); await pokerDialog(project, session.id); }
+      } catch { clearInterval(boardTimer); }
+    }, 3000);
+  } catch (error) { flash(error.message); }
+}
+function burndownChart(data, unit = 'puntos') {
   const width = 820, height = 340, left = 46, right = 20, top = 16, bottom = 40;
   const max = Math.max(data.committed, 1);
   const x = index => left + index * (width - left - right) / Math.max(data.days.length - 1, 1);
   const y = value => top + (height - top - bottom) * (1 - value / max);
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(step => Math.round(max * step));
   const line = key => data.days.map((day, index) => day[key] === null ? null : `${x(index)},${y(day[key])}`).filter(Boolean).join(' ');
-  return `<svg class="burndown-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Gráfico Burndown">${ticks.map(tick => `<line x1="${left}" x2="${width - right}" y1="${y(tick)}" y2="${y(tick)}" class="grid"/><text x="${left - 10}" y="${y(tick) + 4}" text-anchor="end">${tick}</text>`).join('')}${data.days.map((day, index) => `<text x="${x(index)}" y="${height - 14}" text-anchor="middle">${escape(day.date.slice(8))}/${escape(day.date.slice(5, 7))}</text>`).join('')}<polyline points="${line('ideal')}" class="ideal"/><polyline points="${line('remaining')}" class="real"/>${data.days.map((day, index) => day.remaining === null ? '' : `<circle cx="${x(index)}" cy="${y(day.remaining)}" r="4" class="real-point"><title>${escape(day.date)}: ${day.remaining} puntos</title></circle>`).join('')}</svg>`;
+  const label = day => day.label ? escape(day.label) : `${escape(day.date.slice(8))}/${escape(day.date.slice(5, 7))}`;
+  return `<svg class="burndown-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Gráfico Burndown por ${unit}">${ticks.map(tick => `<line x1="${left}" x2="${width - right}" y1="${y(tick)}" y2="${y(tick)}" class="grid"/><text x="${left - 10}" y="${y(tick) + 4}" text-anchor="end">${tick}</text>`).join('')}${data.days.map((day, index) => `<text x="${x(index)}" y="${height - 14}" text-anchor="middle">${label(day)}</text>`).join('')}<polyline points="${line('ideal')}" class="ideal"/><polyline points="${line('remaining')}" class="real"/>${data.days.map((day, index) => day.remaining === null ? '' : `<circle cx="${x(index)}" cy="${y(day.remaining)}" r="4" class="real-point"><title>${escape(day.date)}: ${day.remaining} ${unit}</title></circle>`).join('')}</svg>`;
 }
 function velocityChart(data) {
   const width = 820, height = 280, left = 46, right = 20, top = 16, bottom = 44;
@@ -679,10 +780,25 @@ function velocityChart(data) {
 }
 async function burndownDialog(project, sprintId, from = 'sprints') {
   try {
+    const sprints = await api(`/projects/${project.id}/sprints`);
+    const selector = `<label class="metrics-selector">Ver<select id="metrics-sprint">${sprints.map(sprint => `<option value="${sprint.id}" ${sprint.id === sprintId ? 'selected' : ''}>${escape(sprint.name)} · ${escape(sprint.status)}</option>`).join('')}<option value="general" ${sprintId === 'general' ? 'selected' : ''}>General del proyecto</option></select></label>`;
+    const bindSelector = () => { document.querySelector('#metrics-sprint').onchange = event => { clearInterval(boardTimer); burndownDialog(project, event.target.value === 'general' ? 'general' : Number(event.target.value), from); }; };
+    const back = `<div class="story-actions"><button id="back-metrics" class="quiet">${from === 'board' ? 'Volver al tablero' : 'Volver a sprints'}</button></div>`;
+    const bindBack = () => { document.querySelector('#back-metrics').onclick = () => { clearInterval(boardTimer); return from === 'board' ? boardDialog(project) : sprintsDialog(project); }; };
+    if (sprintId === 'general') {
+      const general = await api(`/projects/${project.id}/burndown`);
+      dialog('Métricas del proyecto', `<div class="metrics-top"><p class="muted">${escape(project.name)} · Vista general acumulada de ${general.sprints} ${general.sprints === 1 ? 'sprint' : 'sprints'}</p>${selector}</div><div class="metric-cards"><div><small>Puntos del Product Backlog</small><strong>${general.committed}</strong></div><div><small>Puntos completados</small><strong>${general.completed}</strong></div><div><small>Puntos restantes</small><strong>${general.remaining}</strong></div></div><section class="burndown"><div class="burndown-heading"><h3>Burndown general del proyecto</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Puntos restantes</div></div>${general.committed ? burndownChart(general) : '<section class="empty"><h2>Sin datos para graficar</h2><p>Estima las historias del Product Backlog.</p></section>'}</section>${back}`);
+      modal.classList.add('board-modal');
+      bindSelector();
+      bindBack();
+      clearInterval(boardTimer);
+      return;
+    }
     const [data, velocity] = await Promise.all([api(`/projects/${project.id}/sprints/${sprintId}/burndown`), api(`/projects/${project.id}/velocity`)]);
-    dialog('Métricas del sprint', `<p class="muted">${escape(project.name)} · ${escape(data.sprint.name)} · ${escape(data.sprint.status)}</p><div class="metric-cards"><div><small>Puntos comprometidos</small><strong>${data.committed}</strong></div><div><small>Puntos completados</small><strong>${data.completed}</strong></div><div><small>Puntos restantes</small><strong>${data.remaining}</strong></div></div><section class="burndown"><div class="burndown-heading"><h3>Gráfico Burndown</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Puntos restantes</div></div>${!data.committed ? '<section class="empty"><h2>Sin datos para graficar</h2><p>Selecciona historias estimadas para el sprint.</p></section>' : burndownChart(data)}${data.sprint.status === 'En planificación' && data.committed ? '<p class="muted">El sprint aún no inicia. La línea de puntos restantes aparecerá al iniciarlo.</p>' : ''}</section><section class="burndown velocity"><div class="burndown-heading"><h3>Velocidad del equipo</h3><div class="legend"><span class="legend-committed"></span>Comprometidos<span class="legend-completed"></span>Completados</div></div>${velocity.sprints.length ? `${velocityChart(velocity)}<p class="muted">Promedio de velocidad: <strong>${velocity.average}</strong> puntos por sprint en ${velocity.sprints.length} ${velocity.sprints.length === 1 ? 'sprint cerrado' : 'sprints cerrados'}.</p>` : '<section class="empty"><h2>Aún no hay datos de velocidad</h2><p>La velocidad se calcula con los sprints cerrados del proyecto.</p></section>'}</section><div class="story-actions"><button id="back-metrics" class="quiet">${from === 'board' ? 'Volver al tablero' : 'Volver a sprints'}</button></div>`);
+    dialog('Métricas del sprint', `<div class="metrics-top"><p class="muted">${escape(project.name)} · ${escape(data.sprint.name)} · ${escape(data.sprint.status)}</p>${selector}</div><div class="metric-cards"><div><small>Puntos comprometidos</small><strong>${data.committed}</strong></div><div><small>Puntos completados</small><strong>${data.completed}</strong></div><div><small>Puntos restantes</small><strong>${data.remaining}</strong></div></div><section class="burndown"><div class="burndown-heading"><h3>Burndown por puntos</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Puntos restantes</div></div>${!data.committed ? '<section class="empty"><h2>Sin datos para graficar</h2><p>Selecciona historias estimadas para el sprint.</p></section>' : burndownChart(data)}${data.sprint.status === 'En planificación' && data.committed ? '<p class="muted">El sprint aún no inicia. La línea de puntos restantes aparecerá al iniciarlo.</p>' : ''}</section><section class="burndown"><div class="burndown-heading"><h3>Burndown por horas</h3><div class="legend"><span class="legend-ideal"></span>Línea ideal<span class="legend-real"></span>Horas restantes</div></div><div class="metric-cards"><div><small>Horas estimadas</small><strong>${data.hours.committed}</strong></div><div><small>Horas reales registradas</small><strong>${data.hours.logged}</strong></div><div><small>Horas restantes</small><strong>${data.hours.remaining}</strong></div></div>${!data.hours.committed ? '<section class="empty"><h2>Sin horas estimadas</h2><p>Estima las horas de las historias con Planning Poker para ver esta gráfica.</p></section>' : burndownChart(data.hours, 'horas')}</section><section class="burndown velocity"><div class="burndown-heading"><h3>Velocidad del equipo</h3><div class="legend"><span class="legend-committed"></span>Comprometidos<span class="legend-completed"></span>Completados</div></div>${velocity.sprints.length ? `${velocityChart(velocity)}<p class="muted">Promedio de velocidad: <strong>${velocity.average}</strong> puntos por sprint en ${velocity.sprints.length} ${velocity.sprints.length === 1 ? 'sprint cerrado' : 'sprints cerrados'}.</p>` : '<section class="empty"><h2>Aún no hay datos de velocidad</h2><p>La velocidad se calcula con los sprints cerrados del proyecto.</p></section>'}</section>${back}`);
     modal.classList.add('board-modal');
-    document.querySelector('#back-metrics').onclick = () => { clearInterval(boardTimer); return from === 'board' ? boardDialog(project) : sprintsDialog(project); };
+    bindSelector();
+    bindBack();
     clearInterval(boardTimer);
     if (data.sprint.status !== 'Activo') return;
     const initial = await api(`/projects/${project.id}/board/version`);

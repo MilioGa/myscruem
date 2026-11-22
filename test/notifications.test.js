@@ -24,11 +24,9 @@ test('Notificaciones de asignación, cambio de estado e impedimentos, privadas p
     assert.equal(rows.length, 1);
     assert.match(rows[0].message, /te asignó la tarea "Para segundo" en Portal/);
     const own = (await f.developer(`/projects/${f.project.id}/board`)).tasks.find(task => task.title === 'Propia');
-    await f.developer(`${tasks}/${assigned.id}/status`, 'PATCH', { status: 'En curso' });
-    await f.developer(`${tasks}/${assigned.id}/status`, 'PATCH', { status: 'En curso' });
+    await f.developer(`${tasks}/${assigned.id}/status`, 'PATCH', { status: 'En curso' }, 403);
     rows = f.db.prepare('SELECT kind,message FROM notifications WHERE user_id=? ORDER BY id').all(secondId);
-    assert.deepEqual(rows.map(row => row.kind), ['Asignación', 'Cambio de estado']);
-    assert.match(rows[1].message, /movió tu tarea "Para segundo" a En curso/);
+    assert.deepEqual(rows.map(row => row.kind), ['Asignación']);
     const impediment = await f.developer(`${tasks}/${own.id}/impediments`, 'POST', { description: 'Bloqueo' }, 201);
     await f.master(`/projects/${f.project.id}/impediments/${impediment.id}/close`, 'POST', { solution: 'Resuelto' });
     let mine = await f.developer('/notifications');
@@ -46,6 +44,6 @@ test('Notificaciones de asignación, cambio de estado e impedimentos, privadas p
     assert.equal(mine.items[0].read, 1);
     f.db.prepare('UPDATE notifications SET read=0').run();
     assert.deepEqual(await f.developer('/notifications/read', 'POST', { all: true }), { unread: 0 });
-    assert.equal(f.db.prepare('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0').get(secondId).total, 2);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS total FROM notifications WHERE user_id=? AND read=0').get(secondId).total, 1);
   } finally { await f.close(); }
 });

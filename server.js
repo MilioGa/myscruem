@@ -37,6 +37,9 @@ const password = value => {
 export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', 'myscruem.sqlite'), sessionMs = 30 * 60 * 1000, now = () => new Date() } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  const get = (sql, ...params) => db.prepare(sql).get(...params);
+  const all = (sql, ...params) => db.prepare(sql).all(...params);
+  const run = (sql, ...params) => db.prepare(sql).run(...params);
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
@@ -62,7 +65,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
-  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0']]) {
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0'], ['capacity_hours', 'REAL']]) {
     if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
   }
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
@@ -91,6 +94,8 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_poker ON poker_sessions(story_id) WHERE status<>'Cerrada';
     CREATE TABLE IF NOT EXISTS poker_votes (session_id INTEGER NOT NULL REFERENCES poker_sessions(id), round INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), value TEXT NOT NULL, PRIMARY KEY(session_id,round,user_id));
   `);
+  db.exec('CREATE TABLE IF NOT EXISTS tutorial_progress (user_id INTEGER NOT NULL REFERENCES users(id), module_id TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(user_id,module_id))');
+  db.exec('CREATE TABLE IF NOT EXISTS work_logs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), hours REAL NOT NULL, day TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
   db.exec("CREATE TABLE IF NOT EXISTS scoped_dod (scope TEXT NOT NULL CHECK(scope IN ('Historia','Sprint')), ref_id INTEGER NOT NULL, criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(scope,ref_id))");
   db.exec(`
     CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), actor_id INTEGER REFERENCES users(id), project_id INTEGER REFERENCES projects(id), task_id INTEGER REFERENCES tasks(id), kind TEXT NOT NULL, message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -101,9 +106,19 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE TABLE IF NOT EXISTS task_attachments (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
   `);
   db.exec(`
-    CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), type TEXT NOT NULL CHECK(type IN ('Daily','Revisión','Retrospectiva')), date TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), type TEXT NOT NULL CHECK(type IN ('Planning','Daily','Revisión','Retrospectiva')), date TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS agreements (id INTEGER PRIMARY KEY, meeting_id INTEGER NOT NULL REFERENCES meetings(id), text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, done_by INTEGER REFERENCES users(id), done_at TEXT);
   `);
+  if (!get("SELECT sql FROM sqlite_master WHERE name='meetings'").sql.includes("'Planning'")) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec(`BEGIN;
+      CREATE TABLE meetings_planning (id INTEGER PRIMARY KEY, sprint_id INTEGER NOT NULL REFERENCES sprints(id), type TEXT NOT NULL CHECK(type IN ('Planning','Daily','Revisión','Retrospectiva')), date TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+      INSERT INTO meetings_planning SELECT id,sprint_id,type,date,attendees,notes,created_by,created_at FROM meetings;
+      DROP TABLE meetings;
+      ALTER TABLE meetings_planning RENAME TO meetings;
+      COMMIT;`);
+    db.exec('PRAGMA foreign_keys = ON');
+  }
   db.exec('CREATE TABLE IF NOT EXISTS burndown (sprint_id INTEGER NOT NULL REFERENCES sprints(id), day TEXT NOT NULL, remaining INTEGER NOT NULL, PRIMARY KEY(sprint_id,day))');
   db.exec('CREATE INDEX IF NOT EXISTS tasks_by_sprint ON tasks(sprint_id,position,id)');
   if (!db.prepare('PRAGMA table_info(projects)').all().some(column => column.name === 'created_by')) {
@@ -121,9 +136,6 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   const smallJson = express.json({ limit: '20kb' });
   const uploadJson = express.json({ limit: '8mb' });
   app.use((req, res, next) => (req.method === 'POST' && /^\/api\/projects\/\d+\/tasks\/\d+\/attachments$/.test(req.path) ? uploadJson : smallJson)(req, res, next));
-  const get = (sql, ...params) => db.prepare(sql).get(...params);
-  const all = (sql, ...params) => db.prepare(sql).all(...params);
-  const run = (sql, ...params) => db.prepare(sql).run(...params);
   const transaction = fn => {
     db.exec('BEGIN');
     try { const result = fn(); db.exec('COMMIT'); return result; }
@@ -274,6 +286,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     `DELETE FROM task_comments WHERE task_id IN (${projectTasks})`,
     `DELETE FROM task_attachments WHERE task_id IN (${projectTasks})`,
     `DELETE FROM impediments WHERE task_id IN (${projectTasks})`,
+    `DELETE FROM work_logs WHERE task_id IN (${projectTasks})`,
     `DELETE FROM tasks WHERE sprint_id IN (${projectSprints})`,
     `DELETE FROM agreements WHERE meeting_id IN (SELECT meetings.id FROM meetings JOIN sprints ON sprints.id=meetings.sprint_id WHERE sprints.project_id=?)`,
     `DELETE FROM meetings WHERE sprint_id IN (${projectSprints})`,
@@ -514,7 +527,16 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   app.get('/api/projects/:id/sprints/:sprintId/stories', auth, (req, res) => {
     const { project, sprint } = sprintFor(req);
     const stories = all('SELECT stories.*,sprint_stories.completed FROM stories JOIN sprint_stories ON sprint_stories.story_id=stories.id WHERE sprint_stories.sprint_id=? AND stories.project_id=? ORDER BY position,id', sprint.id, project.id);
-    res.json({ stories: stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria) })), points: stories.reduce((sum, story) => sum + (story.points || 0), 0) });
+    res.json({ stories: stories.map(story => ({ ...story, criteria: JSON.parse(story.criteria), criteria_done: JSON.parse(story.criteria_done) })), points: stories.reduce((sum, story) => sum + (story.points || 0), 0), hours: Math.round(stories.reduce((sum, story) => sum + (story.estimated_hours || 0), 0) * 10) / 10, capacity: sprint.capacity_hours });
+  });
+  app.patch('/api/projects/:id/sprints/:sprintId/capacity', auth, (req, res) => {
+    const { project, sprint } = sprintFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede definir la capacidad del sprint.', 403);
+    if (project.archived || sprint.status === 'Cerrado') fail('No se puede cambiar la capacidad de un sprint cerrado.');
+    if (typeof req.body.hours !== 'number' || !Number.isFinite(req.body.hours) || req.body.hours <= 0 || req.body.hours > 9999) fail('Indica la capacidad en horas (mayor que 0 y hasta 9999).');
+    const hours = Math.round(req.body.hours * 10) / 10;
+    run('UPDATE sprints SET capacity_hours=? WHERE id=?', hours, sprint.id);
+    res.json({ capacity: hours });
   });
   const planningFor = req => {
     const current = sprintFor(req);
@@ -593,7 +615,28 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       const recorded = records.filter(record => record.day <= date || date === dates.at(-1)).at(-1);
       return { date, ideal, remaining: recorded ? recorded.remaining : committed };
     });
-    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days });
+    const plannedHours = Math.round(get('SELECT COALESCE(SUM(stories.estimated_hours),0) AS total FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprint.id).total * 10) / 10;
+    const logs = all('SELECT work_logs.day,SUM(work_logs.hours) AS hours FROM work_logs JOIN tasks ON tasks.id=work_logs.task_id WHERE tasks.sprint_id=? GROUP BY work_logs.day ORDER BY work_logs.day', sprint.id);
+    const logged = Math.round(logs.reduce((sum, log) => sum + log.hours, 0) * 100) / 100;
+    const hourDays = dates.map((date, index) => {
+      const ideal = Math.round(plannedHours * (1 - index / Math.max(dates.length - 1, 1)) * 10) / 10;
+      if (!last || date > last) return { date, ideal, remaining: null };
+      const spent = logs.filter(log => log.day <= date || date === dates.at(-1)).reduce((sum, log) => sum + log.hours, 0);
+      return { date, ideal, remaining: Math.max(Math.round((plannedHours - spent) * 100) / 100, 0) };
+    });
+    res.json({ sprint: { id: sprint.id, name: sprint.name, status: sprint.status, start_date: sprint.start_date, end_date: sprint.end_date }, committed, completed, remaining: Math.max(committed - completed, 0), days, hours: { committed: plannedHours, logged, remaining: Math.max(Math.round((plannedHours - logged) * 100) / 100, 0), days: hourDays } });
+  });
+  app.get('/api/projects/:id/burndown', auth, (req, res) => {
+    const project = projectFor(req);
+    const total = get('SELECT COALESCE(SUM(points),0) AS total FROM stories WHERE project_id=?', project.id).total;
+    const sprints = all("SELECT id,name,status,start_date,end_date,completed_points FROM sprints WHERE project_id=? AND status<>'En planificación' ORDER BY start_date,id", project.id);
+    let done = 0;
+    const steps = sprints.map(sprint => {
+      done += sprint.status === 'Cerrado' ? sprint.completed_points ?? 0 : sprintPoints(sprint.id).completed;
+      return { label: sprint.name, status: sprint.status, remaining: Math.max(total - done, 0) };
+    });
+    const days = [{ label: 'Inicio', remaining: total }, ...steps].map((step, index, list) => ({ date: step.label, label: step.label, ideal: Math.round(total * (1 - index / Math.max(list.length - 1, 1)) * 10) / 10, remaining: step.remaining }));
+    res.json({ project: project.name, committed: total, completed: Math.min(done, total), remaining: Math.max(total - done, 0), sprints: sprints.length, days });
   });
   const assignable = project => {
     const team = get('SELECT id FROM teams WHERE project_id=?', project.id);
@@ -611,13 +654,13 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const project = projectFor(req);
     const sprint = get("SELECT id,name,goal,start_date,end_date,status,committed_points,board_version FROM sprints WHERE project_id=? AND status='Activo'", project.id);
     if (!sprint) return res.json({ sprint: null, columns, stories: [], tasks: [], members: [], types: taskTypes, labels: [] });
-    const stories = all('SELECT stories.id,stories.title,stories.points,sprint_stories.completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
+    const stories = all('SELECT stories.id,stories.title,stories.points,stories.estimated_hours,sprint_stories.completed,epics.name AS epic,epics.color AS epic_color FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id LEFT JOIN epics ON epics.id=stories.epic_id WHERE sprint_stories.sprint_id=? ORDER BY stories.position,stories.id', sprint.id);
     const filters = ['tasks.sprint_id=?'];
     const values = [sprint.id];
     if (req.query.assignee) { filters.push('tasks.assignee_id=?'); values.push(Number(req.query.assignee) || 0); }
     if (req.query.label) { filters.push('tasks.label=?'); values.push(String(req.query.label)); }
     if (req.query.type) { filters.push('tasks.type=?'); values.push(String(req.query.type)); }
-    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type,(SELECT COUNT(*) FROM task_comments WHERE task_comments.task_id=tasks.id) AS comments,(SELECT COUNT(*) FROM task_attachments WHERE task_attachments.task_id=tasks.id) AS attachments,impediments.id AS impediment_id,impediments.description AS impediment FROM tasks JOIN users ON users.id=tasks.assignee_id LEFT JOIN impediments ON impediments.task_id=tasks.id AND impediments.status='Abierto' WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
+    const tasks = all(`SELECT tasks.id,tasks.story_id,tasks.title,tasks.description,tasks.assignee_id,users.name AS assignee,tasks.status,tasks.position,tasks.label,tasks.type,(SELECT COUNT(*) FROM task_comments WHERE task_comments.task_id=tasks.id) AS comments,(SELECT COUNT(*) FROM task_attachments WHERE task_attachments.task_id=tasks.id) AS attachments,(SELECT COALESCE(SUM(hours),0) FROM work_logs WHERE work_logs.task_id=tasks.id) AS hours,impediments.id AS impediment_id,impediments.description AS impediment FROM tasks JOIN users ON users.id=tasks.assignee_id LEFT JOIN impediments ON impediments.task_id=tasks.id AND impediments.status='Abierto' WHERE ${filters.join(' AND ')} ORDER BY tasks.position,tasks.id`, ...values);
     const labels = all("SELECT DISTINCT label FROM tasks WHERE sprint_id=? AND label<>'' ORDER BY label", sprint.id).map(row => row.label);
     const members = assignable(project);
     res.json({ sprint, columns, stories, tasks, members, types: taskTypes, labels });
@@ -667,6 +710,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   });
   app.patch('/api/projects/:id/tasks/:taskId/status', auth, (req, res) => {
     const task = activeTaskFor(req);
+    if (task.assignee_id !== req.user.id) fail('Solo el responsable de la tarea puede moverla.', 403);
     if (!columns.includes(req.body.status)) fail('Selecciona una columna válida.');
     if (task.status !== req.body.status && get("SELECT id FROM impediments WHERE task_id=? AND status='Abierto'", task.id)) fail('La tarea tiene un impedimento abierto. Resuélvelo antes de moverla.', 409);
     if (req.body.status === 'Terminado' && task.status !== 'Terminado' && !get("SELECT id FROM tasks WHERE sprint_id=? AND story_id=? AND id<>? AND status<>'Terminado'", task.sprint_id, task.story_id, task.id)) {
@@ -682,6 +726,17 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
     });
     res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/tasks/:taskId/hours', auth, (req, res) => {
+    const task = activeTaskFor(req);
+    if (task.assignee_id !== req.user.id) fail('Solo el responsable de la tarea registra sus horas.', 403);
+    if (typeof req.body.hours !== 'number' || !Number.isFinite(req.body.hours) || req.body.hours <= 0 || req.body.hours > 24) fail('Las horas deben ser un número mayor que 0 y hasta 24.');
+    const hours = Math.round(req.body.hours * 100) / 100;
+    transaction(() => {
+      run('INSERT INTO work_logs(task_id,user_id,hours,day,created_at) VALUES (?,?,?,?,?)', task.id, req.user.id, hours, today(), now().toISOString());
+      run('UPDATE sprints SET board_version=board_version+1 WHERE id=?', task.sprint_id);
+    });
+    res.status(201).json({ hours: get('SELECT SUM(hours) AS total FROM work_logs WHERE task_id=?', task.id).total });
   });
   const teamData = (req, existing) => {
     const name = text(req.body.name, 'Nombre del equipo');
@@ -771,11 +826,11 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   });
   app.get('/api/projects/:id/stories/:storyId/tasks', auth, (req, res) => {
     const project = projectFor(req);
-    const story = get('SELECT id,title,points,epic_id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
+    const story = get('SELECT id,title,points,estimated_hours,epic_id FROM stories WHERE id=? AND project_id=?', Number(req.params.storyId) || 0, project.id);
     if (!story) fail('Historia no encontrada.', 404);
-    const tasks = all('SELECT tasks.id,tasks.title,tasks.status,users.name AS assignee,sprints.name AS sprint FROM tasks JOIN users ON users.id=tasks.assignee_id JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.story_id=? ORDER BY sprints.id,tasks.position,tasks.id', story.id);
+    const tasks = all('SELECT tasks.id,tasks.title,tasks.status,users.name AS assignee,sprints.name AS sprint,(SELECT COALESCE(SUM(hours),0) FROM work_logs WHERE work_logs.task_id=tasks.id) AS hours FROM tasks JOIN users ON users.id=tasks.assignee_id JOIN sprints ON sprints.id=tasks.sprint_id WHERE tasks.story_id=? ORDER BY sprints.id,tasks.position,tasks.id', story.id);
     const done = tasks.filter(task => task.status === 'Terminado').length;
-    res.json({ story, tasks, done, total: tasks.length, progress: tasks.length ? Math.round(done * 100 / tasks.length) : 0 });
+    res.json({ story, tasks, done, total: tasks.length, progress: tasks.length ? Math.round(done * 100 / tasks.length) : 0, hours: Math.round(tasks.reduce((sum, task) => sum + task.hours, 0) * 100) / 100 });
   });
   app.post('/api/projects/:id/tasks/:taskId/impediments', auth, (req, res) => {
     const task = activeTaskFor(req);
@@ -817,7 +872,16 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     ]
   };
   const plainText = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  app.get('/api/training', auth, (req, res) => res.json({ ...training.guide, infographics: training.infographics, terms: training.glossary.length }));
+  const tutorialStatus = userId => {
+    const completed = all('SELECT module_id FROM tutorial_progress WHERE user_id=? ORDER BY completed_at,module_id', userId).map(row => row.module_id).filter(id => training.guide.modules.some(module => module.id === id));
+    return { completed, finished: completed.length === training.guide.modules.length };
+  };
+  app.get('/api/training', auth, (req, res) => res.json({ ...training.guide, infographics: training.infographics, terms: training.glossary.length, progress: tutorialStatus(req.user.id) }));
+  app.post('/api/training/progress', auth, (req, res) => {
+    if (!training.guide.modules.some(module => module.id === req.body.moduleId)) fail('Sección del tutorial no encontrada.', 404);
+    run('INSERT OR IGNORE INTO tutorial_progress(user_id,module_id,completed_at) VALUES (?,?,?)', req.user.id, req.body.moduleId, now().toISOString());
+    res.json(tutorialStatus(req.user.id));
+  });
   app.get('/api/training/glossary', auth, (req, res) => {
     const query = plainText(typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '').trim();
     res.json(query ? training.glossary.filter(item => plainText(`${item.term} ${item.definition}`).includes(query)) : training.glossary);
@@ -935,22 +999,36 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('DELETE FROM task_attachments WHERE id=?', file.id);
     res.json({ ok: true });
   });
-  const meetingTypes = ['Daily', 'Revisión', 'Retrospectiva'];
+  const meetingTypes = ['Planning', 'Daily', 'Revisión', 'Retrospectiva'];
   app.get('/api/projects/:id/sprints/:sprintId/meetings', auth, (req, res) => {
     const { sprint } = sprintFor(req);
     const meetings = all('SELECT meetings.id,meetings.type,meetings.date,meetings.attendees,meetings.notes,meetings.created_at,users.name AS author FROM meetings JOIN users ON users.id=meetings.created_by WHERE sprint_id=? ORDER BY meetings.date DESC,meetings.id DESC', sprint.id);
     const agreements = all('SELECT agreements.id,agreements.meeting_id,agreements.text,agreements.done,agreements.done_at,users.name AS done_by FROM agreements JOIN meetings ON meetings.id=agreements.meeting_id LEFT JOIN users ON users.id=agreements.done_by WHERE meetings.sprint_id=? ORDER BY agreements.id', sprint.id);
     res.json(meetings.map(meeting => ({ ...meeting, agreements: agreements.filter(item => item.meeting_id === meeting.id).map(({ meeting_id, ...item }) => item) })));
   });
-  app.post('/api/projects/:id/sprints/:sprintId/meetings', auth, (req, res) => {
-    const { project, sprint } = sprintFor(req);
-    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede registrar actas.', 403);
-    if (project.archived) fail('El proyecto está archivado.');
-    if (!meetingTypes.includes(req.body.type)) fail('Selecciona Daily, Revisión o Retrospectiva.');
+  const meetingData = req => {
+    if (!meetingTypes.includes(req.body.type)) fail('Selecciona Planning, Daily, Revisión o Retrospectiva.');
     const date = typeof req.body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date) ? new Date(req.body.date + 'T00:00:00Z') : null;
     if (!date || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== req.body.date) fail('Indica una fecha válida.');
     const attendees = req.body.attendees === undefined || req.body.attendees === '' ? '' : text(req.body.attendees, 'Asistentes', 500);
     const notes = text(req.body.notes, 'Notas', 3000);
+    return { attendees, notes };
+  };
+  app.patch('/api/projects/:id/meetings/:meetingId', auth, (req, res) => {
+    const project = projectFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede editar las reuniones.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const meeting = get('SELECT meetings.id FROM meetings JOIN sprints ON sprints.id=meetings.sprint_id WHERE meetings.id=? AND sprints.project_id=?', Number(req.params.meetingId) || 0, project.id);
+    if (!meeting) fail('Reunión no encontrada.', 404);
+    const { attendees, notes } = meetingData(req);
+    run('UPDATE meetings SET type=?,date=?,attendees=?,notes=? WHERE id=?', req.body.type, req.body.date, attendees, notes, meeting.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/projects/:id/sprints/:sprintId/meetings', auth, (req, res) => {
+    const { project, sprint } = sprintFor(req);
+    if (req.user.role !== 'Scrum Master') fail('Solo un Scrum Master puede registrar actas.', 403);
+    if (project.archived) fail('El proyecto está archivado.');
+    const { attendees, notes } = meetingData(req);
     const agreements = req.body.agreements === undefined ? [] : req.body.agreements;
     if (!Array.isArray(agreements) || agreements.length > 20) fail('Registra hasta 20 acuerdos.');
     const texts = agreements.map(item => text(item, 'Acuerdo', 300));
