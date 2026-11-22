@@ -94,6 +94,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_poker ON poker_sessions(story_id) WHERE status<>'Cerrada';
     CREATE TABLE IF NOT EXISTS poker_votes (session_id INTEGER NOT NULL REFERENCES poker_sessions(id), round INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), value TEXT NOT NULL, PRIMARY KEY(session_id,round,user_id));
   `);
+  if (!db.prepare('PRAGMA table_info(users)').all().some(column => column.name === 'tour_done')) db.exec('ALTER TABLE users ADD COLUMN tour_done INTEGER NOT NULL DEFAULT 0');
   db.exec('CREATE TABLE IF NOT EXISTS tutorial_progress (user_id INTEGER NOT NULL REFERENCES users(id), module_id TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(user_id,module_id))');
   db.exec('CREATE TABLE IF NOT EXISTS work_logs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), user_id INTEGER NOT NULL REFERENCES users(id), hours REAL NOT NULL, day TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)');
   db.exec("CREATE TABLE IF NOT EXISTS scoped_dod (scope TEXT NOT NULL CHECK(scope IN ('Historia','Sprint')), ref_id INTEGER NOT NULL, criteria TEXT NOT NULL, updated_by INTEGER REFERENCES users(id), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(scope,ref_id))");
@@ -218,8 +219,12 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     res.json({ ok: true });
   });
   app.get('/api/me', auth, (req, res) => {
-    const { id, name, email, role, company_id, csrf } = req.user;
-    res.json({ user: { id, name, email, role }, company: get('SELECT * FROM companies WHERE id=?', company_id), csrf });
+    const { id, name, email, role, company_id, csrf, tour_done } = req.user;
+    res.json({ user: { id, name, email, role }, company: get('SELECT * FROM companies WHERE id=?', company_id), csrf, tour: !tour_done });
+  });
+  app.post('/api/tour', auth, (req, res) => {
+    run('UPDATE users SET tour_done=1 WHERE id=?', req.user.id);
+    res.json({ tour: false });
   });
   app.post('/api/logout', auth, (req, res) => {
     run('DELETE FROM sessions WHERE id=?', req.user.sid);
