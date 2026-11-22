@@ -1,0 +1,52 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { setup } from './support.js';
+
+test('TC-11: Planning Poker con voto secreto, revelación, nueva ronda y estimación guardada', async () => {
+  const f = await setup();
+  try {
+    const story = await f.owner(f.stories, 'POST', f.story, 201);
+    const poker = `/projects/${f.project.id}/poker`;
+    await f.developer(poker, 'POST', { storyId: story.id }, 403);
+    await f.master(poker, 'POST', { storyId: 9999 }, 404);
+    const session = await f.master(poker, 'POST', { storyId: story.id }, 201);
+    await f.master(poker, 'POST', { storyId: story.id }, 409);
+    const notices = await f.developer('/notifications');
+    assert.equal(notices.items[0].kind, 'Planning Poker');
+    assert.match(notices.items[0].message, /abrió el Planning Poker de "Registro de clientes"/);
+    assert.deepEqual((await f.developer(poker)).map(item => [item.story_id, item.status, item.round]), [[story.id, 'Votando', 1]]);
+    const path = `${poker}/${session.id}`;
+    await f.developer(`${path}/vote`, 'POST', { value: '4' }, 400);
+    await f.admin(`${path}/vote`, 'POST', { value: '3' }, 403);
+    await f.master(`${path}/reveal`, 'POST', undefined, 400);
+    await f.developer(`${path}/vote`, 'POST', { value: '2' });
+    await f.owner(`${path}/vote`, 'POST', { value: '13' });
+    await f.master(`${path}/vote`, 'POST', { value: '?' });
+    let view = await f.owner(path);
+    assert.deepEqual(view.cards, ['1', '2', '3', '5', '8', '13', '21', '?']);
+    assert.equal(view.mine, '13');
+    assert.ok(view.votes.every(vote => vote.value === null));
+    assert.equal(view.votes.length, 3);
+    await f.developer(`${path}/reveal`, 'POST', undefined, 403);
+    await f.master(`${path}/confirm`, 'POST', { points: 5, hours: 10 }, 409);
+    await f.master(`${path}/reveal`, 'POST');
+    view = await f.developer(path);
+    assert.deepEqual(view.votes.map(vote => [vote.name, vote.value]), [['developer', '2'], ['master', '?'], ['owner', '13']]);
+    await f.developer(`${path}/vote`, 'POST', { value: '5' }, 409);
+    await f.master(`${path}/round`, 'POST');
+    view = await f.developer(path);
+    assert.deepEqual([view.round, view.status, view.votes.length], [2, 'Votando', 0]);
+    await f.developer(`${path}/vote`, 'POST', { value: '8' });
+    await f.owner(`${path}/vote`, 'POST', { value: '8' });
+    await f.master(`${path}/reveal`, 'POST');
+    await f.master(`${path}/confirm`, 'POST', { points: 4, hours: 10 }, 400);
+    await f.master(`${path}/confirm`, 'POST', { points: 8, hours: 0 }, 400);
+    assert.deepEqual(await f.master(`${path}/confirm`, 'POST', { points: 8, hours: 20 }), { points: 8, hours: 20 });
+    const saved = (await f.developer(f.stories)).find(item => item.id === story.id);
+    assert.deepEqual([saved.points, saved.estimated_hours], [8, 20]);
+    assert.deepEqual(await f.developer(poker), []);
+    assert.equal((await f.developer(path)).status, 'Cerrada');
+    await f.outside(path, 'GET', undefined, 404);
+    await f.master(poker, 'POST', { storyId: story.id }, 201);
+  } finally { await f.close(); }
+});
