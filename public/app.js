@@ -63,12 +63,12 @@ async function load() {
   if (state.page === 'teams' && !manager) state.page = 'panel';
   render();
 }
-const navItems = [['backlog', '☰', 'Product Backlog', ['Product Owner', 'Scrum Master', 'Developer']], ['sprints', '◷', 'Sprints', ['Product Owner', 'Scrum Master', 'Developer']], ['board', '▥', 'Tablero Kanban', ['Product Owner', 'Scrum Master', 'Developer']], ['metrics', '↘', 'Métricas', ['Product Owner', 'Scrum Master']], ['impediments', '⚠', 'Impedimentos', ['Scrum Master', 'Developer']]];
+const navItems = [['backlog', '☰', 'Product Backlog', ['Product Owner', 'Scrum Master', 'Developer']], ['poker', '♠', 'Planning Poker', ['Product Owner', 'Scrum Master', 'Developer']], ['sprints', '◷', 'Sprints', ['Product Owner', 'Scrum Master', 'Developer']], ['board', '▥', 'Tablero Kanban', ['Product Owner', 'Scrum Master', 'Developer']], ['metrics', '↘', 'Métricas', ['Product Owner', 'Scrum Master']], ['impediments', '⚠', 'Impedimentos', ['Scrum Master', 'Developer']]];
 const panels = {
   Administrador: { title: 'Panel del Administrador', text: 'Gestiona usuarios, roles y proyectos de la empresa.', actions: [['page:users', '♧', 'Usuarios y roles', 'Invita personas y asigna su rol.'], ['page:projects', '▦', 'Proyectos', 'Consulta los proyectos de la empresa.']] },
   'Product Owner': { title: 'Panel del Product Owner', text: 'Define qué se construye y en qué orden.', actions: [['nav:backlog', '☰', 'Product Backlog', 'Crea, prioriza y ordena las historias.'], ['nav:metrics', '↘', 'Métricas', 'Revisa el avance del producto.'], ['page:projects', '▦', 'Proyectos', 'Crea y administra tus proyectos.']] },
   'Scrum Master': { title: 'Panel del Scrum Master', text: 'Facilita los eventos y elimina los impedimentos del equipo.', actions: [['nav:sprints', '◷', 'Sprints', 'Crea, inicia y cierra sprints.'], ['nav:impediments', '⚠', 'Impedimentos', 'Resuelve los bloqueos del equipo.'], ['nav:metrics', '↘', 'Métricas', 'Consulta el Burndown y la velocidad.'], ['page:teams', '♙', 'Equipos', 'Forma equipos con sus roles Scrum.']] },
-  Developer: { title: 'Panel del Developer', text: 'Construye el incremento y actualiza el avance de tus tareas.', actions: [['nav:board', '▥', 'Tablero Kanban', 'Mueve tus tarjetas y registra tu avance.'], ['nav:backlog', '☰', 'Estimar historias', 'Asigna puntos a las historias.'], ['nav:impediments', '⚠', 'Impedimentos', 'Registra lo que te bloquea.']] }
+  Developer: { title: 'Panel del Developer', text: 'Construye el incremento y actualiza el avance de tus tareas.', actions: [['nav:board', '▥', 'Tablero Kanban', 'Mueve tus tarjetas y registra tu avance.'], ['nav:poker', '♠', 'Planning Poker', 'Vota la estimación con el equipo.'], ['nav:impediments', '⚠', 'Impedimentos', 'Registra lo que te bloquea.']] }
 };
 const activeProjects = () => state.projects.filter(project => !project.archived);
 const currentProject = () => {
@@ -82,6 +82,7 @@ async function openNav(key) {
   if (key === 'sprints') return sprintsDialog(project);
   if (key === 'board') return boardDialog(project);
   if (key === 'impediments') return impedimentsDialog(project);
+  if (key === 'poker') return pokerDialog(project);
   try {
     const sprints = await api(`/projects/${project.id}/sprints`);
     const sprint = sprints.find(item => item.status === 'Activo') || sprints.find(item => item.status === 'Cerrado') || sprints[0];
@@ -705,6 +706,58 @@ function taskForm(project, board) {
     flash('Tarea creada.');
   });
   document.querySelector('#back-board').onclick = () => boardDialog(project);
+}
+async function pokerDialog(project, sessionId) {
+  try {
+    clearInterval(boardTimer);
+    const isMaster = state.user.role === 'Scrum Master' && !project.archived;
+    if (!sessionId) {
+      const [sessions, stories] = await Promise.all([api(`/projects/${project.id}/poker`), api(`/projects/${project.id}/stories`)]);
+      const open = new Set(sessions.map(session => session.story_id));
+      dialog('Planning Poker', `<p class="muted">${escape(project.name)} · Estimación en equipo con cartas Fibonacci</p>${sessions.length ? `<div class="story-list">${sessions.map(session => `<article class="planning-story"><div><strong>HU-${session.story_id} · ${escape(session.title)}</strong><small>Ronda ${session.round} · ${escape(session.status)} · ${session.votes} ${session.votes === 1 ? 'voto' : 'votos'}</small></div><button class="primary" data-poker="${session.id}">Entrar</button></article>`).join('')}</div>` : '<section class="empty"><h2>No hay votaciones abiertas</h2><p>El Scrum Master abre una sesión para cada historia que se va a estimar.</p></section>'}${isMaster ? `<form class="poker-open"><h3>Abrir votación</h3><label>Historia<select name="storyId" required>${stories.filter(story => !open.has(story.id)).map(story => `<option value="${story.id}">HU-${story.id} · ${escape(story.title)} (${story.points ?? 'sin estimar'})</option>`).join('')}</select></label><p class="form-error" role="alert"></p><button type="submit" class="primary">Abrir Planning Poker</button></form>` : ''}`, isMaster ? async data => {
+        const created = await api(`/projects/${project.id}/poker`, 'POST', { storyId: Number(data.storyId) });
+        flash('Votación abierta. El equipo recibió una notificación.');
+        await pokerDialog(project, created.id);
+      } : undefined);
+      document.querySelectorAll('[data-poker]').forEach(button => button.onclick = () => pokerDialog(project, Number(button.dataset.poker)));
+      return;
+    }
+    const session = await api(`/projects/${project.id}/poker/${sessionId}`);
+    if (session.status === 'Cerrada') { flash(`Estimación guardada: ${session.points} puntos y ${session.hours} horas.`); return pokerDialog(project); }
+    const voting = session.status === 'Votando';
+    const counts = session.votes.reduce((map, vote) => map.set(vote.value, (map.get(vote.value) || 0) + 1), new Map());
+    const common = [...counts.entries()].filter(([value]) => value && value !== '?').sort((a, b) => b[1] - a[1])[0]?.[0];
+    const canVote = voting && state.user.role !== 'Administrador' && !project.archived;
+    dialog('Planning Poker', `<p class="muted">${escape(project.name)} · Ronda ${session.round} · ${voting ? 'Votación en curso: los votos están ocultos' : 'Votos revelados'}</p><article class="poker-story"><strong>HU-${session.story_id} · ${escape(session.title)}</strong><p>Como ${escape(session.actor)}, quiero ${escape(session.goal)}, para ${escape(session.benefit)}.</p></article>${canVote ? `<div class="poker-cards">${session.cards.map(card => `<button class="poker-card ${session.mine === card ? 'chosen' : ''}" data-card="${card}">${card}</button>`).join('')}</div><p class="muted">${session.mine ? `Tu voto: ${escape(session.mine)}. Puedes cambiarlo hasta que se revele.` : 'Elige una carta.'}</p>` : ''}<h3>Votos (${session.votes.length})</h3><div class="poker-votes">${session.votes.map(vote => `<div class="poker-vote ${voting ? '' : 'revealed'}"><span>${voting ? '✓' : escape(vote.value)}</span><small>${escape(vote.name)}</small></div>`).join('') || '<p class="muted">Todavía nadie ha votado.</p>'}</div>${!voting && counts.size > 1 ? '<p class="form-error">Los votos son distintos. Comenten sus razones y voten otra ronda.</p>' : ''}${isMaster ? `<div class="story-actions">${voting ? `<button id="reveal" class="primary" ${session.votes.length ? '' : 'disabled'}>Revelar votos</button>` : '<button id="new-round" class="quiet">Votar otra ronda</button>'}</div>${voting ? '' : `<form class="poker-confirm"><h3>Guardar estimación acordada</h3><div class="form-row"><label>Puntos<select name="points">${[1, 2, 3, 5, 8, 13, 21].map(points => `<option ${String(points) === common ? 'selected' : ''}>${points}</option>`).join('')}</select></label><label>Horas estimadas<input name="hours" type="number" min="0.5" max="999" step="0.5" required></label></div><p class="form-error" role="alert"></p><button type="submit" class="primary">Confirmar estimación</button></form>`}` : ''}<div class="story-actions"><button id="back-poker" class="quiet">Volver a las votaciones</button></div>`, isMaster && !voting ? async data => {
+      const result = await api(`/projects/${project.id}/poker/${session.id}/confirm`, 'POST', { points: Number(data.points), hours: Number(data.hours) });
+      flash(`Estimación guardada: ${result.points} puntos y ${result.hours} horas.`);
+      await pokerDialog(project);
+    } : undefined);
+    modal.classList.add('wide-modal', 'poker-modal');
+    document.querySelector('#back-poker').onclick = () => pokerDialog(project);
+    document.querySelectorAll('[data-card]').forEach(button => button.onclick = async () => {
+      try { await api(`/projects/${project.id}/poker/${session.id}/vote`, 'POST', { value: button.dataset.card }); }
+      catch (error) { flash(error.message); }
+      await pokerDialog(project, session.id);
+    });
+    document.querySelector('#reveal')?.addEventListener('click', async () => {
+      try { await api(`/projects/${project.id}/poker/${session.id}/reveal`, 'POST'); } catch (error) { flash(error.message); }
+      await pokerDialog(project, session.id);
+    });
+    document.querySelector('#new-round')?.addEventListener('click', async () => {
+      try { await api(`/projects/${project.id}/poker/${session.id}/round`, 'POST'); } catch (error) { flash(error.message); }
+      await pokerDialog(project, session.id);
+    });
+    const snapshot = JSON.stringify([session.status, session.round, session.votes.length]);
+    boardTimer = setInterval(async () => {
+      if (!modal.open || !modal.classList.contains('poker-modal')) return clearInterval(boardTimer);
+      if (modal.querySelector('.poker-confirm input:focus')) return;
+      try {
+        const current = await api(`/projects/${project.id}/poker/${session.id}`);
+        if (JSON.stringify([current.status, current.round, current.votes.length]) !== snapshot) { clearInterval(boardTimer); await pokerDialog(project, session.id); }
+      } catch { clearInterval(boardTimer); }
+    }, 3000);
+  } catch (error) { flash(error.message); }
 }
 function burndownChart(data, unit = 'puntos') {
   const width = 820, height = 340, left = 46, right = 20, top = 16, bottom = 40;
