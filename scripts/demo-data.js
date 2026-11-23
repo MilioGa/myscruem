@@ -39,40 +39,56 @@ try {
   const second = await member('Daniela Developer', 'dev2@demo.test', 'Developer');
   const master = await member('Sergio Master', 'sm@demo.test', 'Scrum Master');
   const project = await owner.request('/projects', 'POST', { name: 'Portal de clientes', description: 'Proyecto de demostración del tablero Kanban y el gráfico Burndown.' });
-  const stories = [['Registro de clientes', 5], ['Consulta de pedidos', 3], ['Reporte de ventas', 8], ['Perfil del cliente', 2]];
+  const path = `/projects/${project.id}`;
+  await admin('/teams', 'POST', { name: 'Equipo Portal', projectId: project.id, memberIds: [owner.id, master.id, developer.id, second.id] });
+  const clientes = await master.request(`${path}/epics`, 'POST', { name: 'Clientes', description: 'Registro y perfil de los clientes.', color: '#254e80' });
+  const ventas = await master.request(`${path}/epics`, 'POST', { name: 'Pedidos y ventas', description: 'Pedidos, consultas y reportes.', color: '#2f8f6b' });
+  const stories = [['Registro de clientes', 5, 12, clientes], ['Consulta de pedidos', 3, 8, ventas], ['Reporte de ventas', 8, 20, ventas], ['Perfil del cliente', 2, 4, clientes], ['Avisos por correo', null, null, clientes]];
   const ids = [];
-  for (const [title, points] of stories) {
-    const story = await owner.request(`/projects/${project.id}/stories`, 'POST', { title, actor: 'cliente', goal: title.toLowerCase(), benefit: 'mejorar la atención', criteria: ['Los datos se guardan correctamente.'] });
-    await developer.request(`/projects/${project.id}/stories/${story.id}/estimate`, 'PATCH', { points });
+  for (const [title, points, hours, epic] of stories) {
+    const story = await owner.request(`${path}/stories`, 'POST', { title, actor: 'cliente', goal: title.toLowerCase(), benefit: 'mejorar la atención', criteria: ['Los datos se guardan correctamente.', 'Se muestra un mensaje de confirmación.'], epicId: epic.id });
     ids.push(story.id);
+    if (!points) continue;
+    const poker = await master.request(`${path}/poker`, 'POST', { storyId: story.id });
+    for (const person of [developer, second, owner]) await person.request(`${path}/poker/${poker.id}/vote`, 'POST', { value: String(points) });
+    await master.request(`${path}/poker/${poker.id}/reveal`, 'POST');
+    await master.request(`${path}/poker/${poker.id}/confirm`, 'POST', { points, hours });
   }
+  const open = await master.request(`${path}/poker`, 'POST', { storyId: ids[4] });
+  await developer.request(`${path}/poker/${open.id}/vote`, 'POST', { value: '3' });
+  await second.request(`${path}/poker/${open.id}/vote`, 'POST', { value: '5' });
+  const accept = async id => { for (const index of [0, 1]) await developer.request(`${path}/stories/${id}/criteria/${index}`, 'PATCH', { done: true }); };
   const today = new Date();
   const date = offset => new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset).toLocaleDateString('en-CA');
-  const previous = await master.request(`/projects/${project.id}/sprints`, 'POST', { name: 'Sprint 2', startDate: date(-7), endDate: date(-1), goal: 'Perfil del cliente disponible.' });
-  await developer.request(`/projects/${project.id}/sprints/${previous.id}/stories`, 'POST', { storyId: ids[3] });
-  await master.request(`/projects/${project.id}/sprints/${previous.id}/start`, 'POST');
-  const profile = await developer.request(`/projects/${project.id}/tasks`, 'POST', { title: 'Pantalla de perfil', storyId: ids[3], assigneeId: developer.id, label: 'Frontend', type: 'Desarrollo' });
-  await developer.request(`/projects/${project.id}/tasks/${profile.id}/status`, 'PATCH', { status: 'Terminado' });
-  await master.request(`/projects/${project.id}/sprints/${previous.id}/close`, 'POST');
-  await owner.request(`/projects/${project.id}/dod`, 'PUT', { criteria: ['Código revisado por otro integrante', 'Pruebas automáticas aprobadas', 'Criterios de aceptación cumplidos'] });
-  const sprint = await master.request(`/projects/${project.id}/sprints`, 'POST', { name: 'Sprint 3', startDate: date(0), endDate: date(6), goal: 'Tablero Kanban y gráfico Burndown operativos.' });
-  for (const id of ids.slice(0, 3)) await developer.request(`/projects/${project.id}/sprints/${sprint.id}/stories`, 'POST', { storyId: id });
-  await master.request(`/projects/${project.id}/sprints/${sprint.id}/start`, 'POST');
-  await admin('/teams', 'POST', { name: 'Equipo Portal', projectId: project.id, memberIds: [owner.id, master.id, developer.id, second.id] });
-  const clientes = await owner.request(`/projects/${project.id}/epics`, 'POST', { name: 'Clientes', description: 'Registro y perfil de los clientes.' });
-  const ventas = await owner.request(`/projects/${project.id}/epics`, 'POST', { name: 'Pedidos y ventas', description: 'Pedidos, consultas y reportes.' });
-  for (const [index, epic] of [[0, clientes], [3, clientes], [1, ventas], [2, ventas]]) await owner.request(`/projects/${project.id}/stories/${ids[index]}/epic`, 'PATCH', { epicId: epic.id });
-  const tasks = [[ids[0], 'Formulario de registro', developer, 'Terminado', 'Frontend', 'Desarrollo'], [ids[0], 'Pruebas de registro', second, 'Terminado', 'Backend', 'Pruebas'], [ids[1], 'Listado de pedidos', developer, 'En curso', 'Frontend', 'Desarrollo'], [ids[1], 'Filtro por estado', second, 'En revisión', 'Backend', 'Desarrollo'], [ids[2], 'Consulta de ventas', developer, 'Por hacer', 'Backend', 'Desarrollo'], [ids[2], 'Gráfica mensual', second, 'Por hacer', 'Frontend', 'Diseño'], [ids[2], 'Manual del reporte', second, 'Por hacer', '', 'Documentación']];
-  for (const [storyId, title, person, status, label, type] of tasks) {
-    const task = await developer.request(`/projects/${project.id}/tasks`, 'POST', { title, storyId, assigneeId: person.id, label, type });
-    if (status !== 'Por hacer') await developer.request(`/projects/${project.id}/tasks/${task.id}/status`, 'PATCH', { status });
+  const previous = await master.request(`${path}/sprints`, 'POST', { name: 'Sprint 2', startDate: date(-7), endDate: date(-1), goal: 'Perfil del cliente disponible.' });
+  await developer.request(`${path}/sprints/${previous.id}/stories`, 'POST', { storyId: ids[3] });
+  await master.request(`${path}/sprints/${previous.id}/start`, 'POST');
+  const profile = await developer.request(`${path}/tasks`, 'POST', { title: 'Pantalla de perfil', storyId: ids[3], assigneeId: developer.id, label: 'Frontend', type: 'Desarrollo' });
+  await developer.request(`${path}/tasks/${profile.id}/hours`, 'POST', { hours: 4 });
+  await accept(ids[3]);
+  await developer.request(`${path}/tasks/${profile.id}/status`, 'PATCH', { status: 'Terminado' });
+  await master.request(`${path}/sprints/${previous.id}/close`, 'POST');
+  await owner.request(`${path}/dod`, 'PUT', { criteria: ['Código revisado por otro integrante', 'Pruebas automáticas aprobadas', 'Criterios de aceptación cumplidos'] });
+  const sprint = await master.request(`${path}/sprints`, 'POST', { name: 'Sprint 3', startDate: date(0), endDate: date(6), goal: 'Tablero Kanban y gráfico Burndown operativos.' });
+  for (const id of ids.slice(0, 3)) await developer.request(`${path}/sprints/${sprint.id}/stories`, 'POST', { storyId: id });
+  await master.request(`${path}/sprints/${sprint.id}/capacity`, 'PATCH', { hours: 48 });
+  await owner.request(`${path}/sprints/${sprint.id}/dod`, 'PUT', { criteria: ['Demostración preparada para la revisión'] });
+  await owner.request(`${path}/stories/${ids[2]}/dod`, 'PUT', { criteria: ['Reporte validado con datos reales'] });
+  await master.request(`${path}/sprints/${sprint.id}/start`, 'POST');
+  await accept(ids[0]);
+  const tasks = [[ids[0], 'Formulario de registro', developer, 'Terminado', 'Frontend', 'Desarrollo', 6], [ids[0], 'Pruebas de registro', second, 'Terminado', 'Backend', 'Pruebas', 5], [ids[1], 'Listado de pedidos', developer, 'En curso', 'Frontend', 'Desarrollo', 3], [ids[1], 'Filtro por estado', second, 'En revisión', 'Backend', 'Desarrollo', 2], [ids[2], 'Consulta de ventas', developer, 'Por hacer', 'Backend', 'Desarrollo', 0], [ids[2], 'Gráfica mensual', second, 'Por hacer', 'Frontend', 'Diseño', 0], [ids[2], 'Manual del reporte', second, 'Por hacer', '', 'Documentación', 0]];
+  for (const [storyId, title, person, status, label, type, hours] of tasks) {
+    const task = await developer.request(`${path}/tasks`, 'POST', { title, storyId, assigneeId: person.id, label, type });
+    if (hours) await person.request(`${path}/tasks/${task.id}/hours`, 'POST', { hours });
+    if (status !== 'Por hacer') await person.request(`${path}/tasks/${task.id}/status`, 'PATCH', { status });
     if (title === 'Listado de pedidos') {
-      await second.request(`/projects/${project.id}/tasks/${task.id}/comments`, 'POST', { body: 'Revisé el diseño del listado, solo falta la paginación.' });
-      await developer.request(`/projects/${project.id}/tasks/${task.id}/attachments`, 'POST', { filename: 'criterios-listado.txt', data: Buffer.from('Mostrar 20 pedidos por página ordenados por fecha.').toString('base64') });
+      await second.request(`${path}/tasks/${task.id}/comments`, 'POST', { body: 'Revisé el diseño del listado, solo falta la paginación.' });
+      await developer.request(`${path}/tasks/${task.id}/attachments`, 'POST', { filename: 'criterios-listado.txt', data: Buffer.from('Mostrar 20 pedidos por página ordenados por fecha.').toString('base64') });
     }
-    if (title === 'Consulta de ventas') await developer.request(`/projects/${project.id}/tasks/${task.id}/impediments`, 'POST', { description: 'Falta acceso a la base de ventas de prueba.' });
+    if (title === 'Consulta de ventas') await developer.request(`${path}/tasks/${task.id}/impediments`, 'POST', { description: 'Falta acceso a la base de ventas de prueba.' });
   }
-  await master.request(`/projects/${project.id}/sprints/${sprint.id}/meetings`, 'POST', { type: 'Daily', date: date(0), attendees: 'Todo el equipo', notes: 'Se revisó el avance del tablero y el impedimento de la consulta de ventas.', agreements: ['Solicitar acceso a la base de ventas de prueba', 'Revisar el filtro por estado'] });
+  await master.request(`${path}/sprints/${sprint.id}/meetings`, 'POST', { type: 'Planning', date: date(0), attendees: 'Todo el equipo', notes: 'Se eligieron las historias del sprint y se revisó la capacidad de 48 horas.', agreements: ['Terminar el registro de clientes en los primeros días'] });
+  await master.request(`${path}/sprints/${sprint.id}/meetings`, 'POST', { type: 'Daily', date: date(0), attendees: 'Todo el equipo', notes: 'Se revisó el avance del tablero y el impedimento de la consulta de ventas.', agreements: ['Solicitar acceso a la base de ventas de prueba', 'Revisar el filtro por estado'] });
   console.log(`Datos de demostración creados. Código: empresa-demo · Contraseña: ${password}`);
   console.log('Usuarios: admin@demo.test, po@demo.test, sm@demo.test, dev@demo.test, dev2@demo.test');
 } finally {
