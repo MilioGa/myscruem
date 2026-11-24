@@ -12,6 +12,11 @@
       "example": "Se marca como atendido en el acta cuando se cumple."
     },
     {
+      "term": "Capacidad",
+      "definition": "Horas que el equipo puede dedicar al sprint según su disponibilidad.",
+      "example": "El Scrum Master la registra al planear el sprint y la compara con lo comprometido."
+    },
+    {
       "term": "Criterios de aceptación",
       "definition": "Condiciones verificables que una historia debe cumplir para considerarse terminada.",
       "example": "Se escriben uno por línea al crear la historia."
@@ -65,6 +70,11 @@
       "term": "Historia de usuario",
       "definition": "Descripción breve de una necesidad desde el punto de vista de quien la usa.",
       "example": "Se redacta con Como, Quiero y Para, más sus criterios de aceptación."
+    },
+    {
+      "term": "Horas reales",
+      "definition": "Tiempo efectivamente trabajado en una tarea.",
+      "example": "El responsable de la tarjeta las registra y alimentan el Burndown por horas."
     },
     {
       "term": "Impedimento",

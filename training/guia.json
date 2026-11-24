@@ -94,7 +94,7 @@
         },
         {
           "title": "Gráfico Burndown",
-          "body": "Compara la línea ideal, que baja de los puntos comprometidos a cero, con los puntos que realmente quedan cada día. Si la línea real queda por encima de la ideal, el equipo va atrasado y conviene revisarlo en la Daily."
+          "body": "Compara la línea ideal, que baja de los puntos comprometidos a cero, con los puntos que realmente quedan cada día. Si la línea real queda por encima de la ideal, el equipo va atrasado y conviene revisarlo en la Daily. En Métricas puedes elegir el sprint, ver el Burndown por puntos o por horas y la vista general de todo el proyecto."
         },
         {
           "title": "Impedimentos",
@@ -123,6 +123,22 @@
         {
           "title": "Actas de los eventos",
           "body": "El Scrum Master registra desde Sprints > Actas las notas de la Daily, la Revisión y la Retrospectiva, con asistentes y acuerdos. Cada acuerdo se marca como atendido cuando se cumple, para darle seguimiento."
+        },
+        {
+          "title": "Planning Poker",
+          "body": "El Scrum Master abre una votación para cada historia desde Planning Poker. Cada integrante elige en secreto una carta Fibonacci (1, 2, 3, 5, 8, 13 o 21, o ? si no sabe). Al revelar se muestran todos los votos a la vez; si son distintos, el equipo comenta sus razones y vota otra ronda. Al llegar a un acuerdo, el Scrum Master guarda los puntos y las horas estimadas."
+        },
+        {
+          "title": "Capacidad y horas reales",
+          "body": "Al planear el sprint, el Scrum Master define la capacidad en horas y la compara con las horas comprometidas de las historias elegidas. Durante el sprint, cada Developer registra en su tarjeta las horas reales trabajadas; con ellas se dibuja el Burndown por horas."
+        },
+        {
+          "title": "Épicas y criterios de aceptación",
+          "body": "El Scrum Master crea las épicas con nombre, descripción y color, y cada historia pertenece a una épica. Los criterios de aceptación se marcan con una casilla; una historia no pasa a Terminado mientras tenga criterios sin marcar."
+        },
+        {
+          "title": "Recorrido y ayuda",
+          "body": "La primera vez que entras se muestra un recorrido con las funciones de tu rol. Puedes saltarlo y volver a abrirlo cuando quieras desde el botón Ayuda del encabezado, donde también está este tutorial."
         }
       ]
     }
