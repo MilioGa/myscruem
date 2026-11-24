@@ -1,0 +1,56 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { setup } from './support.js';
+
+test('Flujo completo del sprint 6 desde el equipo hasta las métricas generales', async () => {
+  let current = new Date(2026, 10, 18, 9);
+  const f = await setup({ now: () => current });
+  try {
+    const users = await f.admin('/users');
+    const id = name => users.find(user => user.name === name).id;
+    await f.admin('/teams', 'POST', { name: 'Equipo Portal', projectId: f.project.id, memberIds: [id('developer'), id('master')] }, 400);
+    await f.admin('/teams', 'POST', { name: 'Equipo Portal', projectId: f.project.id, memberIds: [id('developer'), id('master'), id('owner')] }, 201);
+    await f.outside(`/projects/${f.project.id}`, 'GET', undefined, 404);
+    const epic = await f.master(`/projects/${f.project.id}/epics`, 'POST', { name: 'Pedidos', description: 'Consulta de pedidos', color: '#c0392b' }, 201);
+    const story = await f.owner(f.stories, 'POST', { ...f.story, title: 'Consulta de pedidos', epicId: epic.id }, 201);
+    await f.owner(`${f.stories}/${story.id}`, 'PATCH', { ...f.story, title: 'Consulta de pedidos por estado', epicId: epic.id });
+    await f.owner(`${f.stories}/${story.id}/dod`, 'PUT', { criteria: ['Filtro probado con datos reales'] });
+    const poker = `/projects/${f.project.id}/poker`;
+    const session = await f.master(poker, 'POST', { storyId: story.id }, 201);
+    for (const [request, value] of [[f.developer, '3'], [f.owner, '5']]) await request(`${poker}/${session.id}/vote`, 'POST', { value });
+    await f.master(`${poker}/${session.id}/reveal`, 'POST');
+    await f.master(`${poker}/${session.id}/round`, 'POST');
+    for (const request of [f.developer, f.owner]) await request(`${poker}/${session.id}/vote`, 'POST', { value: '5' });
+    await f.master(`${poker}/${session.id}/reveal`, 'POST');
+    await f.master(`${poker}/${session.id}/confirm`, 'POST', { points: 5, hours: 10 });
+    const sprints = `/projects/${f.project.id}/sprints`;
+    const sprint = await f.master(sprints, 'POST', { name: 'Sprint 6', startDate: '2026-11-18', endDate: '2026-11-20', goal: 'Pedidos' }, 201);
+    await f.developer(`${sprints}/${sprint.id}/stories`, 'POST', { storyId: story.id }, 201);
+    await f.master(`${sprints}/${sprint.id}/capacity`, 'PATCH', { hours: 16 });
+    await f.owner(`${sprints}/${sprint.id}/dod`, 'PUT', { criteria: ['Demostración lista'] });
+    await f.master(`${sprints}/${sprint.id}/meetings`, 'POST', { type: 'Planning', date: '2026-11-18', notes: 'Se eligió la consulta de pedidos' }, 201);
+    await f.master(`${sprints}/${sprint.id}/start`, 'POST');
+    assert.deepEqual((await f.developer(`${sprints}/${sprint.id}/stories`)).stories.map(item => item.title), ['Consulta de pedidos por estado']);
+    const tasks = `/projects/${f.project.id}/tasks`;
+    const task = await f.developer(tasks, 'POST', { title: 'Filtro', storyId: story.id, assigneeId: id('developer') }, 201);
+    await f.developer(`${tasks}/${task.id}/status`, 'PATCH', { status: 'En curso' });
+    const impediment = await f.developer(`${tasks}/${task.id}/impediments`, 'POST', { description: 'Sin datos' }, 201);
+    await f.master(`/projects/${f.project.id}/impediments/${impediment.id}/close`, 'POST', { solution: 'Datos cargados' });
+    await f.developer(`${tasks}/${task.id}/hours`, 'POST', { hours: 6 }, 201);
+    current = new Date(2026, 10, 19, 9);
+    await f.developer(`${tasks}/${task.id}/hours`, 'POST', { hours: 3 }, 201);
+    await f.developer(`${tasks}/${task.id}/status`, 'PATCH', { status: 'Terminado' }, 409);
+    await f.accept(story.id);
+    await f.developer(`${tasks}/${task.id}/status`, 'PATCH', { status: 'Terminado' });
+    const chart = await f.owner(`${sprints}/${sprint.id}/burndown`);
+    assert.deepEqual([chart.hours.committed, chart.hours.logged, chart.days[1].remaining], [10, 9, 0]);
+    current = new Date(2026, 10, 20, 18);
+    assert.deepEqual(await f.master(`${sprints}/${sprint.id}/close`, 'POST'), { committed: 5, completed: 5, returned: 0 });
+    const general = await f.owner(`/projects/${f.project.id}/burndown`);
+    assert.deepEqual([general.committed, general.completed, general.remaining], [5, 5, 0]);
+    assert.equal((await f.owner(`/projects/${f.project.id}/velocity`)).average, 5);
+    await f.developer(`/projects/${f.project.id}`, 'DELETE', undefined, 403);
+    await f.owner(`/projects/${f.project.id}`, 'DELETE');
+    assert.ok((await f.developer('/projects')).every(project => project.id !== f.project.id));
+  } finally { await f.close(); }
+});
