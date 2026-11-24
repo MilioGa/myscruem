@@ -65,7 +65,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
   `);
   db.exec('CREATE TABLE IF NOT EXISTS sprint_stories (sprint_id INTEGER NOT NULL REFERENCES sprints(id), story_id INTEGER NOT NULL UNIQUE REFERENCES stories(id), PRIMARY KEY(sprint_id,story_id))');
   const sprintColumns = db.prepare('PRAGMA table_info(sprints)').all().map(column => column.name);
-  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0'], ['capacity_hours', 'REAL']]) {
+  for (const [name, type] of [['started_at', 'TEXT'], ['closed_at', 'TEXT'], ['committed_points', 'INTEGER'], ['completed_points', 'INTEGER'], ['board_version', 'INTEGER NOT NULL DEFAULT 0'], ['capacity_hours', 'REAL'], ['committed_hours', 'REAL']]) {
     if (!sprintColumns.includes(name)) db.exec(`ALTER TABLE sprints ADD COLUMN ${name} ${type}`);
   }
   if (!db.prepare('PRAGMA table_info(sprint_stories)').all().some(column => column.name === 'completed')) {
@@ -580,6 +580,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     run('INSERT INTO burndown(sprint_id,day,remaining) VALUES (?,?,?) ON CONFLICT(sprint_id,day) DO UPDATE SET remaining=excluded.remaining', sprintId, today(), Math.max((sprint.committed_points || 0) - completed, 0));
   };
   const sprintPoints = sprintId => get('SELECT COUNT(*) AS total, COALESCE(SUM(stories.points),0) AS points, COALESCE(SUM(CASE WHEN sprint_stories.completed=1 THEN stories.points ELSE 0 END),0) AS completed FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprintId);
+  const sprintHours = sprintId => Math.round(get('SELECT COALESCE(SUM(stories.estimated_hours),0) AS total FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprintId).total * 10) / 10;
   app.post('/api/projects/:id/sprints/:sprintId/start', auth, (req, res) => {
     const { project, sprint } = masterFor(req);
     if (sprint.status !== 'En planificación') fail('Solo se puede iniciar un sprint en planificación.');
@@ -587,7 +588,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     if (!committed.total) fail('Selecciona al menos una historia antes de iniciar el sprint.');
     if (get("SELECT id FROM sprints WHERE project_id=? AND status='Activo'", project.id)) fail('El proyecto ya tiene un sprint activo.', 409);
     transaction(() => {
-      run("UPDATE sprints SET status='Activo',started_at=?,committed_points=? WHERE id=?", now().toISOString(), committed.points, sprint.id);
+      run("UPDATE sprints SET status='Activo',started_at=?,committed_points=?,committed_hours=? WHERE id=?", now().toISOString(), committed.points, sprintHours(sprint.id), sprint.id);
       recordBurndown(sprint.id);
     });
     res.json({ ok: true });
@@ -598,9 +599,10 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
     const summary = transaction(() => {
       const points = sprintPoints(sprint.id);
       const committed = sprint.committed_points ?? points.points;
+      const hours = sprint.committed_hours ?? sprintHours(sprint.id);
       recordBurndown(sprint.id);
       const returned = run('DELETE FROM sprint_stories WHERE sprint_id=? AND completed=0', sprint.id).changes;
-      run("UPDATE sprints SET status='Cerrado',closed_at=?,committed_points=?,completed_points=? WHERE id=?", now().toISOString(), committed, points.completed, sprint.id);
+      run("UPDATE sprints SET status='Cerrado',closed_at=?,committed_points=?,committed_hours=?,completed_points=? WHERE id=?", now().toISOString(), committed, hours, points.completed, sprint.id);
       return { committed, completed: points.completed, returned: Number(returned) };
     });
     res.json(summary);
@@ -620,7 +622,7 @@ export function createApp({ dbPath = process.env.DB_PATH || join(root, 'data', '
       const recorded = records.filter(record => record.day <= date || date === dates.at(-1)).at(-1);
       return { date, ideal, remaining: recorded ? recorded.remaining : committed };
     });
-    const plannedHours = Math.round(get('SELECT COALESCE(SUM(stories.estimated_hours),0) AS total FROM sprint_stories JOIN stories ON stories.id=sprint_stories.story_id WHERE sprint_stories.sprint_id=?', sprint.id).total * 10) / 10;
+    const plannedHours = sprint.committed_hours ?? sprintHours(sprint.id);
     const logs = all('SELECT work_logs.day,SUM(work_logs.hours) AS hours FROM work_logs JOIN tasks ON tasks.id=work_logs.task_id WHERE tasks.sprint_id=? GROUP BY work_logs.day ORDER BY work_logs.day', sprint.id);
     const logged = Math.round(logs.reduce((sum, log) => sum + log.hours, 0) * 100) / 100;
     const hourDays = dates.map((date, index) => {
